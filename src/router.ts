@@ -312,7 +312,6 @@ export class Router {
    * Send a message to the Arbiter
    */
   private async sendToArbiter(text: string): Promise<void> {
-    console.log('[Router Debug] sendToArbiter called with:', text.substring(0, 50));
     if (!this.arbiterQuery) {
       console.error("Arbiter session not started");
       return;
@@ -340,7 +339,6 @@ export class Router {
       prompt: text,
       options,
     });
-    console.log('[Router Debug] Created new query with resume:', this.state.arbiterSessionId);
 
     await this.processArbiterMessages(this.arbiterQuery);
   }
@@ -424,8 +422,6 @@ export class Router {
     try {
       try {
         for await (const message of generator) {
-          console.log('[Router Debug] Arbiter message type:', message.type, (message as any).subtype || '');
-          console.log('[Router Debug] Full message:', JSON.stringify(message, null, 2).substring(0, 500));
           await this.handleArbiterMessage(message);
         }
       } catch (error: any) {

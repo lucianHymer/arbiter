@@ -103,7 +103,6 @@ export function createArbiterMcpServer(
         "Summon a new Orchestrator to execute a task. Provide complete context and instructions.",
         { prompt: z.string().describe("Full task description and context") },
         async ({ prompt }) => {
-          console.log('[Arbiter Tool] spawn_orchestrator called with prompt:', prompt.substring(0, 100));
           const orchNum = getOrchestratorCount() + 1;
 
           // Notify the main app to spawn the orchestrator
