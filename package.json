@@ -1,0 +1,23 @@
+{
+  "name": "arbiter",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "test:headless": "tsx src/test-headless.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "latest",
+    "blessed": "^0.1.81",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/blessed": "^0.1.25",
+    "@types/node": "^20.10.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.0"
+  }
+}
