@@ -127,8 +127,8 @@ export function createLayout(): LayoutElements {
   const inputBox = blessed.textbox({
     parent: screen,
     bottom: 0,
-    left: 0,
-    width: '100%',
+    left: 2,  // Leave room for "> " prompt
+    width: '100%-2',
     height: 3,
     inputOnFocus: true,
     mouse: true,
@@ -139,6 +139,23 @@ export function createLayout(): LayoutElements {
       border: {
         fg: 'white',
       },
+    },
+    border: {
+      type: 'line',
+    },
+  });
+
+  // Create a fixed prompt label "> " that sits to the left of the input
+  const promptLabel = blessed.text({
+    parent: screen,
+    bottom: 1,
+    left: 0,
+    width: 2,
+    height: 1,
+    content: '> ',
+    style: {
+      fg: 'white',
+      bg: 'black',
     },
   });
 

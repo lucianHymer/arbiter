@@ -32,6 +32,37 @@ const PROGRESS_CHARS = {
 const TOOL_INDICATOR = '\u25C8'; // ◈
 
 /**
+ * Animation state for loading dots
+ */
+let animationFrame = 0;
+
+/**
+ * Generates animated dots text based on current animation frame
+ * Cycles through: "Working." -> "Working.." -> "Working..."
+ * @param baseText - The base text to animate (e.g., "Working" or "Waiting for Arbiter")
+ * @returns The text with animated dots appended
+ */
+export function getAnimatedDots(baseText: string): string {
+  const dotCount = (animationFrame % 3) + 1;
+  return baseText + '.'.repeat(dotCount);
+}
+
+/**
+ * Advances the animation frame for the loading dots
+ * Should be called by an interval timer
+ */
+export function advanceAnimation(): void {
+  animationFrame = (animationFrame + 1) % 3;
+}
+
+/**
+ * Resets the animation frame to 0
+ */
+export function resetAnimation(): void {
+  animationFrame = 0;
+}
+
+/**
  * Renders the conversation log to the conversation box
  * Formats messages with speakers (You:, Arbiter:, Orchestrator I:, etc.)
  */
@@ -80,6 +111,11 @@ export function renderConversation(elements: LayoutElements, state: AppState): v
 }
 
 /**
+ * Waiting state enum for different waiting scenarios
+ */
+export type WaitingState = 'none' | 'arbiter' | 'orchestrator';
+
+/**
  * Renders the status bar with context percentages and current tool
  *
  * When orchestrator is active:
@@ -90,8 +126,10 @@ export function renderConversation(elements: LayoutElements, state: AppState): v
  * When no orchestrator (Arbiter speaks to human):
  * ║  Arbiter ─────────────────────────────────────────────────── ██░░░░░░░░ 18%    ║
  * ║  Awaiting your command.                                                        ║
+ *
+ * @param waitingState - Optional waiting state to show animated dots
  */
-export function renderStatus(elements: LayoutElements, state: AppState): void {
+export function renderStatus(elements: LayoutElements, state: AppState, waitingState: WaitingState = 'none'): void {
   const { statusBox, screen } = elements;
   const effectiveWidth = Math.max((screen.width as number) - 2, 78);
 
@@ -128,11 +166,22 @@ export function renderStatus(elements: LayoutElements, state: AppState): void {
       const toolText = `${TOOL_INDICATOR} ${state.currentOrchestrator.currentTool} (${state.currentOrchestrator.toolCallCount})`;
       const toolPadding = ' '.repeat(effectiveWidth - toolText.length - 2);
       toolLine = `${BOX_CHARS.vertical}  ${toolText}${toolPadding}${BOX_CHARS.vertical}`;
+    } else if (waitingState === 'orchestrator') {
+      // Show animated dots when waiting for orchestrator response
+      const waitingText = getAnimatedDots('Working');
+      const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
+      toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
     } else {
       const waitingText = 'Working...';
       const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
       toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
     }
+  } else if (waitingState === 'arbiter') {
+    // Waiting for Arbiter response - show animated dots
+    const waitingText = getAnimatedDots('Waiting for Arbiter');
+    const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
+    orchestratorLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
+    toolLine = `${BOX_CHARS.vertical}${' '.repeat(effectiveWidth)}${BOX_CHARS.vertical}`;
   } else {
     // No orchestrator - show awaiting message
     const awaitingText = 'Awaiting your command.';

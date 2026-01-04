@@ -195,10 +195,16 @@ export class Router {
       abortController: this.arbiterAbortController,
       // Bypass permissions so MCP tools work without prompts
       permissionMode: 'bypassPermissions',
-      // Allow MCP tools since Arbiter primarily uses them
+      // Arbiter's allowed tools: MCP tools + read-only exploration
       allowedTools: [
         'mcp__arbiter-tools__spawn_orchestrator',
         'mcp__arbiter-tools__disconnect_orchestrators',
+        'Read',
+        'Glob',
+        'Grep',
+        'WebSearch',
+        'WebFetch',
+        'Task',  // For Explore subagent only
       ],
       // Resume if we have an existing session
       ...(this.state.arbiterSessionId
@@ -328,10 +334,16 @@ export class Router {
       } : undefined,
       // Bypass permissions so MCP tools work without prompts
       permissionMode: 'bypassPermissions',
-      // Allow MCP tools since Arbiter primarily uses them
+      // Arbiter's allowed tools: MCP tools + read-only exploration
       allowedTools: [
         'mcp__arbiter-tools__spawn_orchestrator',
         'mcp__arbiter-tools__disconnect_orchestrators',
+        'Read',
+        'Glob',
+        'Grep',
+        'WebSearch',
+        'WebFetch',
+        'Task',  // For Explore subagent only
       ],
     };
 

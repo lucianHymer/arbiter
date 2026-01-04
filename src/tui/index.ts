@@ -4,7 +4,7 @@
 import { AppState } from '../state.js';
 import { RouterCallbacks } from '../router.js';
 import { createLayout, LayoutElements } from './layout.js';
-import { renderConversation, renderStatus, renderAll } from './render.js';
+import { renderConversation, renderStatus, renderAll, advanceAnimation, resetAnimation, WaitingState } from './render.js';
 
 /**
  * TUI interface - main entry point for the terminal UI
@@ -18,6 +18,10 @@ export interface TUI {
   getRouterCallbacks(): RouterCallbacks;
   /** Registers a callback for user input */
   onInput(callback: (text: string) => void): void;
+  /** Start the loading animation for arbiter or orchestrator */
+  startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void;
+  /** Stop the loading animation */
+  stopWaiting(): void;
 }
 
 /**
@@ -42,6 +46,53 @@ export function createTUI(state: AppState): TUI {
   let elements: LayoutElements | null = null;
   let inputCallback: ((text: string) => void) | null = null;
   let isRunning = false;
+  let waitingState: WaitingState = 'none';
+  let animationInterval: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Starts the loading animation interval
+   */
+  function startAnimation(newWaitingState: WaitingState): void {
+    waitingState = newWaitingState;
+    resetAnimation();
+
+    // Clear any existing interval
+    if (animationInterval) {
+      clearInterval(animationInterval);
+    }
+
+    // Start animation interval (updates every 400ms for smooth animation)
+    animationInterval = setInterval(() => {
+      if (elements && isRunning && waitingState !== 'none') {
+        advanceAnimation();
+        renderStatus(elements, state, waitingState);
+      }
+    }, 400);
+
+    // Render immediately with the new waiting state
+    if (elements && isRunning) {
+      renderStatus(elements, state, waitingState);
+    }
+  }
+
+  /**
+   * Stops the loading animation interval
+   */
+  function stopAnimation(): void {
+    waitingState = 'none';
+
+    if (animationInterval) {
+      clearInterval(animationInterval);
+      animationInterval = null;
+    }
+
+    resetAnimation();
+
+    // Render status without waiting state
+    if (elements && isRunning) {
+      renderStatus(elements, state, 'none');
+    }
+  }
 
   /**
    * Updates the input box with proper prompt styling
@@ -142,6 +193,9 @@ export function createTUI(state: AppState): TUI {
   function stop(): void {
     if (!isRunning || !elements) return;
 
+    // Stop any running animation
+    stopAnimation();
+
     // Destroy the screen
     elements.screen.destroy();
     elements = null;
@@ -170,22 +224,22 @@ export function createTUI(state: AppState): TUI {
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
         if (!elements || !isRunning) return;
 
-        // Render updated status bar
-        renderStatus(elements, state);
+        // Render updated status bar (preserve waiting state for animation)
+        renderStatus(elements, state, waitingState);
       },
 
       onToolUse: (tool: string, count: number) => {
         if (!elements || !isRunning) return;
 
-        // Render updated status bar
-        renderStatus(elements, state);
+        // Render updated status bar (preserve waiting state for animation)
+        renderStatus(elements, state, waitingState);
       },
 
       onModeChange: (mode: AppState['mode']) => {
         if (!elements || !isRunning) return;
 
-        // Render updated status bar (mode affects orchestrator display)
-        renderStatus(elements, state);
+        // Render updated status bar (mode affects orchestrator display, preserve waiting state)
+        renderStatus(elements, state, waitingState);
       },
     };
   }
@@ -202,9 +256,12 @@ export function createTUI(state: AppState): TUI {
     stop,
     getRouterCallbacks,
     onInput,
+    startWaiting: startAnimation,
+    stopWaiting: stopAnimation,
   };
 }
 
 // Re-export types and utilities
 export type { LayoutElements } from './layout.js';
 export { renderProgressBar } from './render.js';
+export type { WaitingState } from './render.js';
