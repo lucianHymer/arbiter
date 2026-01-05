@@ -368,7 +368,8 @@ function sleep(ms: number): Promise<void> {
 export async function showForestIntro(selectedCharacter: number): Promise<void> {
   // Load tileset
   const tileset = await loadTileset();
-  const grassTile = extractTile(tileset, TILE.GRASS);
+  // Use sparse grass (trail tile) for character compositing, not plain grass
+  const trailTile = extractTile(tileset, TILE.GRASS_SPARSE);
 
   // Setup terminal
   process.stdout.write(CLEAR_SCREEN);
@@ -396,14 +397,15 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
 
   // Render initial forest scene (no character yet)
   const initialScene = createForestScene(null, -1);
-  renderForestScene(tileset, grassTile, initialScene, sceneStartRow);
+  renderForestScene(tileset, trailTile, initialScene, sceneStartRow);
 
   // Render tile-based dialogue box overlay with first text
+  // Use simple white text - no background colors, let tile show through
   renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
-    `${BOLD}${BRIGHT_YELLOW}YOU WANDER THROUGH${RESET}`,
-    `${BOLD}${BRIGHT_YELLOW}THE FOREST...${RESET}`,
+    `${WHITE}YOU WANDER THROUGH${RESET}`,
+    `${WHITE}THE FOREST...${RESET}`,
     '',
-    `${BOLD}${YELLOW}TOWARDS A CLEARING AHEAD${RESET}`,
+    `${WHITE}TOWARDS A CLEARING AHEAD${RESET}`,
   ], dialogueBoxWidthTiles);
 
   // Wait ~2 seconds, then auto-start walking (no Enter needed)
@@ -418,7 +420,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   for (let col = 0; col <= SCENE_WIDTH - 1; col++) {
     // Create scene with character at current position
     const walkScene = createForestScene(selectedCharacter, col);
-    renderForestScene(tileset, grassTile, walkScene, sceneStartRow);
+    renderForestScene(tileset, trailTile, walkScene, sceneStartRow);
 
     // Wait between frames
     await sleep(350);
@@ -431,18 +433,19 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
 
   // Render scene with character at rightmost position (col 6)
   const finalScene = createForestScene(selectedCharacter, SCENE_WIDTH - 1);
-  renderForestScene(tileset, grassTile, finalScene, sceneStartRow);
+  renderForestScene(tileset, trailTile, finalScene, sceneStartRow);
 
   // Render tile-based dialogue box with THE ARBITER full title reveal
+  // Use white text with bold for emphasis on key phrases
   renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
-    `${BOLD}${BRIGHT_YELLOW}YOU APPROACH THE LAIR OF${RESET}`,
+    `${WHITE}You approach the lair of${RESET}`,
     '',
-    `${BOLD}${BRIGHT_RED}THE ARBITER${RESET}`,
-    `${BOLD}${BRIGHT_RED}OF THAT WHICH WAS,${RESET}`,
-    `${BOLD}${BRIGHT_RED}THAT WHICH IS,${RESET}`,
-    `${BOLD}${BRIGHT_RED}AND THAT WHICH SHALL COME TO BE${RESET}`,
+    `${BOLD}${WHITE}THE ARBITER${RESET}`,
+    `${WHITE}OF THAT WHICH WAS,${RESET}`,
+    `${WHITE}THAT WHICH IS,${RESET}`,
+    `${WHITE}AND THAT WHICH SHALL COME TO BE${RESET}`,
     '',
-    `${CYAN}Press Enter to continue...${RESET}`,
+    `${WHITE}Press Enter to continue...${RESET}`,
   ], dialogueBoxWidthTiles);
 
   // Wait for Enter
