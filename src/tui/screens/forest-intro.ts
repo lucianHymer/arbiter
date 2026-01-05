@@ -32,6 +32,9 @@ const KEY_CTRL_C = '\u0003';
 // ANSI color codes
 const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
+const BRIGHT_YELLOW = '\x1b[93m';
+const BRIGHT_RED = '\x1b[91m';
+const BOLD = '\x1b[1m';
 
 /**
  * Move cursor to a specific position
@@ -199,33 +202,39 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
 
   const sceneStartRow = 3;
   const textRow = sceneStartRow + SCENE_HEIGHT * CHAR_HEIGHT + 2;
-  const promptRow = textRow + 2;
 
   // -------------------------------------------------------------------------
-  // Phase 1: Show forest scene with first narrative text
+  // Phase 1: Show forest scene with first dramatic narrative text
   // -------------------------------------------------------------------------
 
   // Render initial forest scene (no character yet)
   const initialScene = createForestScene(null, -1);
   renderForestScene(tileset, grassTile, initialScene, sceneStartRow);
 
-  // Display first narrative text
+  // Display first dramatic multi-line narrative text
   process.stdout.write(moveCursor(textRow, 1));
-  process.stdout.write(centerText(`${YELLOW}You wander through the forest towards a clearing ahead.${RESET}`));
+  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}YOU WANDER THROUGH${RESET}`));
+  process.stdout.write(moveCursor(textRow + 1, 1));
+  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}THE FOREST...${RESET}`));
+  process.stdout.write(moveCursor(textRow + 3, 1));
+  process.stdout.write(centerText(`${BOLD}${YELLOW}TOWARDS A CLEARING AHEAD${RESET}`));
 
   // Show prompt
-  process.stdout.write(moveCursor(promptRow, 1));
+  const promptRowPhase1 = textRow + 5;
+  process.stdout.write(moveCursor(promptRowPhase1, 1));
   process.stdout.write(centerText(`${CYAN}Press Enter to continue...${RESET}`));
 
   // Wait for Enter
   await waitForEnter();
 
-  // Clear the prompt
-  process.stdout.write(moveCursor(promptRow, 1));
-  process.stdout.write(' '.repeat(112));
+  // Clear the text area
+  for (let i = 0; i < 6; i++) {
+    process.stdout.write(moveCursor(textRow + i, 1));
+    process.stdout.write(' '.repeat(112));
+  }
 
   // -------------------------------------------------------------------------
-  // Phase 2: Animate character walking across the screen
+  // Phase 2: Animate character walking across the screen (starts immediately)
   // -------------------------------------------------------------------------
 
   // Walk from left (-1, off-screen) to right (7, off-screen)
@@ -239,21 +248,41 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3: Show second narrative text
+  // Phase 3: Show EPIC second narrative text with dramatic title reveal
   // -------------------------------------------------------------------------
 
   // Render final forest scene (character has exited)
   const finalScene = createForestScene(null, -1);
   renderForestScene(tileset, grassTile, finalScene, sceneStartRow);
 
-  // Display second narrative text
+  // Display EPIC multi-line title with dramatic styling
+  // Line 1: "YOU APPROACH THE LAIR OF"
   process.stdout.write(moveCursor(textRow, 1));
-  process.stdout.write(' '.repeat(112)); // Clear previous text
-  process.stdout.write(moveCursor(textRow, 1));
-  process.stdout.write(centerText(`${YELLOW}You approach the lair of the Arbiter, of that which was, that which is, and that which shall come to be.${RESET}`));
+  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}YOU APPROACH THE LAIR OF${RESET}`));
 
-  // Show prompt again
-  process.stdout.write(moveCursor(promptRow, 1));
+  // Dramatic pause
+  await sleep(600);
+
+  // Line 2: "THE ARBITER" - in red/orange for emphasis
+  process.stdout.write(moveCursor(textRow + 2, 1));
+  process.stdout.write(centerText(`${BOLD}${BRIGHT_RED}THE ARBITER${RESET}`));
+
+  // Dramatic pause
+  await sleep(800);
+
+  // Lines 3-5: The dramatic subtitle
+  process.stdout.write(moveCursor(textRow + 4, 1));
+  process.stdout.write(centerText(`${BOLD}${YELLOW}OF THAT WHICH WAS,${RESET}`));
+  await sleep(400);
+  process.stdout.write(moveCursor(textRow + 5, 1));
+  process.stdout.write(centerText(`${BOLD}${YELLOW}THAT WHICH IS,${RESET}`));
+  await sleep(400);
+  process.stdout.write(moveCursor(textRow + 6, 1));
+  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}AND THAT WHICH SHALL COME TO BE${RESET}`));
+
+  // Show prompt
+  const promptRowPhase3 = textRow + 8;
+  process.stdout.write(moveCursor(promptRowPhase3, 1));
   process.stdout.write(centerText(`${CYAN}Press Enter to continue...${RESET}`));
 
   // Wait for Enter

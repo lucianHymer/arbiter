@@ -156,9 +156,9 @@ export function createScene(state: SceneState): TileSpec[][] {
     for (let col = 0; col < SCENE_WIDTH; col++) {
       let tile: TileSpec = getGrassTile(row, col);
 
-      // Trees on left edge (col 0)
+      // Trees on left edge (col 0), except row 2 which is the path entrance
       if (col === 0) {
-        tile = TILE.PINE_TREE;
+        tile = row === 2 ? TILE.GRASS_SPARSE : TILE.PINE_TREE;
       }
 
       // Bare trees at specific positions on col 1
