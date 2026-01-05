@@ -480,7 +480,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
     `${WHITE}You approach the lair of${RESET}`,
     '',
-    `${BOLD}${WHITE}THE ARBITER${RESET}`,
+    `${BOLD}\x1b[38;2;100;255;255mTHE ARBITER${RESET}`,
     `${WHITE}OF THAT WHICH \x1b[38;2;100;200;255mWAS${WHITE},${RESET}`,
     `${WHITE}THAT WHICH \x1b[38;2;200;100;255mIS${WHITE},${RESET}`,
     `${WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
