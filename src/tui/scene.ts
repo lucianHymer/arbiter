@@ -179,9 +179,9 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = selectedCharacter;
       }
 
-      // Spellbook appears to the left of arbiter when at position 2 (col 4)
-      // Spellbook at col 3 (to arbiter's left)
-      if (arbiterPos === 2 && row === 2 && col === 3) {
+      // Spellbook appears below the arbiter when at position 2 (col 4)
+      // Arbiter is at row 2, col 4; spellbook at row 3, col 4 (directly below)
+      if (arbiterPos === 2 && row === 3 && col === 4) {
         tile = TILE.SPELLBOOK;
       }
 
