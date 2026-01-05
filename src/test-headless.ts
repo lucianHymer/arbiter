@@ -17,6 +17,11 @@ let testComplete = false;
  */
 function createMockCallbacks(): RouterCallbacks {
   return {
+    onHumanMessage: (text: string) => {
+      console.log("\n=== HUMAN MESSAGE ===");
+      console.log(text);
+      console.log("======================\n");
+    },
     onArbiterMessage: (text: string) => {
       console.log("\n=== ARBITER MESSAGE ===");
       console.log(text);

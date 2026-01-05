@@ -207,6 +207,13 @@ export function createTUI(state: AppState): TUI {
    */
   function getRouterCallbacks(): RouterCallbacks {
     return {
+      onHumanMessage: (text: string) => {
+        if (!elements || !isRunning) return;
+
+        // Render updated conversation immediately so human message appears before response
+        renderConversation(elements, state);
+      },
+
       onArbiterMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
@@ -240,6 +247,14 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated status bar (mode affects orchestrator display, preserve waiting state)
         renderStatus(elements, state, waitingState);
+      },
+
+      onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
+        startAnimation(waitingFor);
+      },
+
+      onWaitingStop: () => {
+        stopAnimation();
       },
     };
   }

@@ -39,6 +39,8 @@ import {
  * These are called by the router to notify the UI of state changes
  */
 export type RouterCallbacks = {
+  /** Called when the human sends a message (for immediate display before response) */
+  onHumanMessage: (text: string) => void;
   /** Called when the Arbiter produces text output */
   onArbiterMessage: (text: string) => void;
   /** Called when an Orchestrator produces text output */
@@ -52,6 +54,10 @@ export type RouterCallbacks = {
   onToolUse: (tool: string, count: number) => void;
   /** Called when the routing mode changes */
   onModeChange: (mode: AppState["mode"]) => void;
+  /** Called when waiting for a response starts */
+  onWaitingStart?: (waitingFor: 'arbiter' | 'orchestrator') => void;
+  /** Called when waiting for a response stops */
+  onWaitingStop?: () => void;
 };
 
 // Maximum context window size (200K tokens)
@@ -111,8 +117,9 @@ export class Router {
    * - arbiter_to_orchestrator: Inject to Arbiter tagged as "Human:"
    */
   async sendHumanMessage(text: string): Promise<void> {
-    // Log the human message
+    // Log the human message and notify TUI immediately
     addMessage(this.state, "human", text);
+    this.callbacks.onHumanMessage(text);
 
     if (this.state.mode === "human_to_arbiter") {
       // Send directly to Arbiter
@@ -150,6 +157,9 @@ export class Router {
    * Creates and starts the Arbiter session with MCP tools
    */
   private async startArbiterSession(): Promise<void> {
+    // Notify that we're waiting for Arbiter
+    this.callbacks.onWaitingStart?.('arbiter');
+
     // Create abort controller for this session
     this.arbiterAbortController = new AbortController();
 
@@ -231,6 +241,9 @@ export class Router {
     prompt: string,
     number: number
   ): Promise<void> {
+    // Notify that we're waiting for Orchestrator
+    this.callbacks.onWaitingStart?.('orchestrator');
+
     // Increment orchestrator count
     this.orchestratorCount = number;
 
@@ -246,11 +259,12 @@ export class Router {
     // Create callbacks for hooks
     const orchestratorCallbacks: OrchestratorCallbacks = {
       onContextUpdate: (_sessionId: string, percent: number) => {
-        currentContextPercent = percent;
-        updateOrchestratorContext(this.state, percent);
+        // Context should never decrease - use the maximum
+        currentContextPercent = Math.max(percent, currentContextPercent);
+        updateOrchestratorContext(this.state, currentContextPercent);
         this.callbacks.onContextUpdate(
           this.state.arbiterContextPercent,
-          percent
+          currentContextPercent
         );
       },
       onToolUse: (tool: string) => {
@@ -323,6 +337,9 @@ export class Router {
       return;
     }
 
+    // Notify that we're waiting for Arbiter
+    this.callbacks.onWaitingStart?.('arbiter');
+
     // Create a new query to continue the conversation
     // Note: In the SDK, we use resume with the session ID to continue
     const options: Options = {
@@ -363,6 +380,9 @@ export class Router {
       console.error("No active orchestrator");
       return;
     }
+
+    // Notify that we're waiting for Orchestrator
+    this.callbacks.onWaitingStart?.('orchestrator');
 
     // Create a new query to continue the conversation
     const options: Options = {
@@ -444,6 +464,9 @@ export class Router {
         throw error;
       }
 
+      // Stop waiting animation after Arbiter response is complete
+      this.callbacks.onWaitingStop?.();
+
       // Check if we need to spawn an orchestrator
       if (this.pendingOrchestratorPrompt) {
         const prompt = this.pendingOrchestratorPrompt;
@@ -494,11 +517,23 @@ export class Router {
             (usage.cache_read_input_tokens || 0) +
             (usage.cache_creation_input_tokens || 0);
           const pct = (total / MAX_CONTEXT_TOKENS) * 100;
-          updateArbiterContext(this.state, pct);
+
+          console.log('[Context Debug] Arbiter:', {
+            input: usage.input_tokens,
+            cache_read: usage.cache_read_input_tokens,
+            cache_creation: usage.cache_creation_input_tokens,
+            total,
+            pct,
+            previous: this.state.arbiterContextPercent
+          });
+
+          // Context should never decrease - use the maximum of current and new
+          const finalPct = Math.max(pct, this.state.arbiterContextPercent);
+          updateArbiterContext(this.state, finalPct);
 
           // Notify callback
           const orchPct = this.state.currentOrchestrator?.contextPercent ?? null;
-          this.callbacks.onContextUpdate(pct, orchPct);
+          this.callbacks.onContextUpdate(finalPct, orchPct);
         }
         break;
     }
@@ -514,6 +549,9 @@ export class Router {
       for await (const message of generator) {
         await this.handleOrchestratorMessage(message);
       }
+
+      // Stop waiting animation after Orchestrator response is complete
+      this.callbacks.onWaitingStop?.();
     } catch (error: any) {
       if (error?.name === 'AbortError') {
         // Silently ignore - this is expected during shutdown
@@ -560,11 +598,23 @@ export class Router {
             (usage.cache_creation_input_tokens || 0);
           const pct = (total / MAX_CONTEXT_TOKENS) * 100;
 
+          console.log('[Context Debug] Orchestrator:', {
+            input: usage.input_tokens,
+            cache_read: usage.cache_read_input_tokens,
+            cache_creation: usage.cache_creation_input_tokens,
+            total,
+            pct,
+            previous: this.state.currentOrchestrator?.contextPercent ?? 0
+          });
+
           if (this.state.currentOrchestrator) {
-            updateOrchestratorContext(this.state, pct);
+            // Context should never decrease - use the maximum
+            const previousPct = this.state.currentOrchestrator.contextPercent;
+            const finalPct = Math.max(pct, previousPct);
+            updateOrchestratorContext(this.state, finalPct);
             this.callbacks.onContextUpdate(
               this.state.arbiterContextPercent,
-              pct
+              finalPct
             );
           }
         }
