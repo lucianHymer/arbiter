@@ -35,6 +35,17 @@ import {
 } from "./orchestrator.js";
 
 /**
+ * Log entry types for debug logging
+ */
+export type DebugLogEntry = {
+  type: 'message' | 'tool' | 'system';
+  speaker?: string;  // For messages: 'human', 'arbiter', 'Orchestrator I', etc.
+  text: string;
+  filtered?: boolean;  // True if this was filtered from main chat
+  details?: any;
+};
+
+/**
  * Callbacks for TUI integration
  * These are called by the router to notify the UI of state changes
  */
@@ -62,6 +73,8 @@ export type RouterCallbacks = {
   onOrchestratorSpawn?: (orchestratorNumber: number) => void;
   /** Called when orchestrators are disconnected (for tile scene demon removal) */
   onOrchestratorDisconnect?: () => void;
+  /** Called for ALL events for debug logging (logbook) - includes filtered messages */
+  onDebugLog?: (entry: DebugLogEntry) => void;
 };
 
 // Maximum context window size (200K tokens)
@@ -283,6 +296,15 @@ export class Router {
         // Update state and notify callback
         updateOrchestratorTool(this.state, tool, newCount);
         this.callbacks.onToolUse(tool, newCount);
+
+        // Log tool use to debug (logbook) with orchestrator context
+        const conjuringLabel = `Conjuring ${toRoman(number)}`;
+        this.callbacks.onDebugLog?.({
+          type: 'tool',
+          speaker: conjuringLabel,
+          text: `[Tool] ${tool}`,
+          details: { tool, count: newCount },
+        });
       },
     };
 
@@ -416,12 +438,26 @@ export class Router {
    * In human_to_arbiter mode, display to human
    */
   private async handleArbiterOutput(text: string): Promise<void> {
-    // Log the message (always, for history)
+    // Log the message (always, for history/debug)
     addMessage(this.state, "arbiter", text);
 
-    // Only notify TUI when in human_to_arbiter mode
-    // When orchestrator is active, Arbiter should be "silent" (watching)
-    if (this.state.mode === "human_to_arbiter") {
+    // Filter out echo garbage when orchestrator is active
+    // Echo messages typically contain "Orchestrator" or "Human:" at the start
+    // which means Arbiter is just parroting back routing prefixes
+    const looksLikeEcho = this.state.mode === "arbiter_to_orchestrator" &&
+      (text.includes("Orchestrator") && text.includes(":") ||
+       text.startsWith("Human:") ||
+       text.includes("Human: Orchestrator"));
+
+    // ALWAYS log to debug (logbook) - even filtered messages
+    this.callbacks.onDebugLog?.({
+      type: 'message',
+      speaker: 'arbiter',
+      text,
+      filtered: looksLikeEcho,
+    });
+
+    if (!looksLikeEcho) {
       this.callbacks.onArbiterMessage(text);
     }
 
@@ -445,9 +481,17 @@ export class Router {
 
     const orchNumber = this.state.currentOrchestrator.number;
     const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
+    const conjuringLabel = `Conjuring ${toRoman(orchNumber)}`;
 
     // Log the message
     addMessage(this.state, orchLabel, text);
+
+    // Log to debug (logbook)
+    this.callbacks.onDebugLog?.({
+      type: 'message',
+      speaker: conjuringLabel,
+      text,
+    });
 
     // Notify callback
     this.callbacks.onOrchestratorMessage(orchNumber, text);

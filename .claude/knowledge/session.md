@@ -93,3 +93,34 @@ Alternative fixes:
 **Files**: src/router.ts, src/arbiter.ts, src/tui/index.ts
 ---
 
+### [20:09] [architecture] Hierarchical AI orchestration - context management design
+**Details**: The Arbiter is a hierarchical AI orchestration system that extends effective context by managing a chain of Claude sessions.
+
+**The Core Insight:**
+- Arbiter keeps Orchestrators on task
+- Orchestrators keep their Subagents on task
+- Each layer has ~200k context window
+- Top level (Arbiter) holds the vision and problem understanding
+- Lower levels do detailed work without losing the forest for the trees
+
+**Why This Beats Serial Chaining:**
+Serial handoffs lose context and vision. No one stays on task. The Arbiter pattern maintains an "overarching person" who has the full vision in one context window and keeps everyone aligned.
+
+**How spawn_orchestrator MCP Tool Works:**
+1. Tool defined with Claude Agent SDK's `tool()` helper + Zod schema
+2. Registered as MCP server with Arbiter's query session
+3. Claude (the AI) decides to call it via standard tool_use mechanism
+4. Handler is async - stores prompt in `pendingOrchestratorPrompt`
+5. After Arbiter turn completes, Router spawns the Orchestrator session
+6. This is EVENT-DRIVEN with callbacks, NOT a state machine
+
+**Flow:**
+Human → Arbiter (manager, MCP tools) → Orchestrators (workers) → Subagents (do actual work)
+
+**Key Files:**
+- src/arbiter.ts: MCP tool definitions (spawn_orchestrator, disconnect_orchestrators)
+- src/router.ts: Message routing, session management, deferred spawning
+- src/orchestrator.ts: Orchestrator session with full tools + blocking subagents
+**Files**: src/arbiter.ts, src/router.ts, src/orchestrator.ts
+---
+

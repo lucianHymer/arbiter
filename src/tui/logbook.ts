@@ -11,9 +11,10 @@ import * as os from 'os';
 export interface LogEntry {
   timestamp: Date;
   type: 'message' | 'tool' | 'context' | 'mode' | 'system';
-  speaker?: string;  // human, arbiter, Orchestrator I, etc.
+  speaker?: string;  // human, arbiter, Conjuring I, etc.
   text: string;
   details?: any;  // extra data for debug mode
+  filtered?: boolean;  // True if this was filtered from main chat view
 }
 
 /**
@@ -103,19 +104,21 @@ export class Logbook {
    */
   private formatEntryForDebug(entry: LogEntry): string {
     const ts = formatTimestamp(entry.timestamp);
+    const filteredMark = entry.filtered ? ' [FILTERED]' : '';
 
     switch (entry.type) {
       case 'message':
-        return `${ts} MESSAGE ${entry.speaker}: ${entry.text}`;
+        return `${ts} ${entry.speaker}: ${entry.text}${filteredMark}`;
       case 'tool':
-        return `${ts} TOOL ${entry.text}`;
+        const toolSpeaker = entry.speaker ? `${entry.speaker}: ` : '';
+        return `${ts} ${toolSpeaker}[Tool] ${entry.text}`;
       case 'context':
-        return `${ts} CONTEXT ${entry.text}`;
+        return `${ts} [Context] ${entry.text}`;
       case 'mode':
-        return `${ts} MODE ${entry.text}`;
+        return `${ts} [Mode] ${entry.text}`;
       case 'system':
         const detailsStr = entry.details ? ` ${JSON.stringify(entry.details)}` : '';
-        return `${ts} SYSTEM ${entry.text}${detailsStr}`;
+        return `${ts} [System] ${entry.text}${detailsStr}`;
       default:
         return `${ts} ${entry.text}`;
     }
@@ -152,15 +155,17 @@ export class Logbook {
 
   /**
    * Adds a message entry to the log
-   * @param speaker - Who is speaking (human, arbiter, Orchestrator I, etc.)
+   * @param speaker - Who is speaking (human, arbiter, Conjuring I, etc.)
    * @param text - The message text
+   * @param filtered - Whether this message was filtered from main chat view
    */
-  addMessage(speaker: string, text: string): void {
+  addMessage(speaker: string, text: string, filtered: boolean = false): void {
     const entry: LogEntry = {
       timestamp: new Date(),
       type: 'message',
       speaker,
       text,
+      filtered,
     };
     this.entries.push(entry);
     this.writeToFile(entry);
@@ -170,12 +175,15 @@ export class Logbook {
    * Adds a tool use entry to the log
    * @param tool - The tool name
    * @param count - The number of times the tool has been used
+   * @param speaker - Optional speaker (e.g., "Conjuring I")
    */
-  addToolUse(tool: string, count: number): void {
+  addToolUse(tool: string, count: number, speaker?: string): void {
     const entry: LogEntry = {
       timestamp: new Date(),
       type: 'tool',
+      speaker,
       text: `${tool} (${count})`,
+      details: { tool, count },
     };
     this.entries.push(entry);
     this.writeToFile(entry);

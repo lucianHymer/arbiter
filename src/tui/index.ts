@@ -3,7 +3,7 @@
 
 import blessed from 'blessed';
 import { AppState, toRoman, updateArbiterContext, updateOrchestratorContext, updateOrchestratorTool } from '../state.js';
-import { RouterCallbacks } from '../router.js';
+import { RouterCallbacks, DebugLogEntry } from '../router.js';
 import { createLayout, LayoutElements, appendToLogbook, getTileAreaPosition } from './layout.js';
 import { renderStatus, advanceAnimation, resetAnimation, WaitingState } from './render.js';
 import { Logbook } from './logbook.js';
@@ -343,7 +343,7 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on human
         sceneState.focusTarget = 'human';
 
-        // Log the message to logbook
+        // Log the message to logbook (human messages don't come via onDebugLog)
         if (logbook) {
           logbook.addMessage('human', text);
         }
@@ -359,10 +359,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on arbiter
         sceneState.focusTarget = 'arbiter';
 
-        // Log the message to logbook
-        if (logbook) {
-          logbook.addMessage('arbiter', text);
-        }
+        // Note: Logging is handled by onDebugLog callback
+        // This callback only handles main chat display
 
         // Append to AIM-style chat log
         elements.chatLog.log('{yellow-fg}Arbiter:{/yellow-fg} ' + text);
@@ -375,10 +373,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on demon
         sceneState.focusTarget = 'demon';
 
-        // Log the message with Roman numeral to logbook
-        if (logbook) {
-          logbook.addMessage(`Orchestrator ${toRoman(orchestratorNumber)}`, text);
-        }
+        // Note: Logging is handled by onDebugLog callback
+        // This callback only handles main chat display
 
         // Append to AIM-style chat log
         elements.chatLog.log('{cyan-fg}Conjuring ' + toRoman(orchestratorNumber) + ':{/cyan-fg} ' + text);
@@ -410,10 +406,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update state with tool information
         updateOrchestratorTool(state, tool, count);
 
-        // Log the tool use
-        if (logbook) {
-          logbook.addToolUse(tool, count);
-        }
+        // Note: Logging is handled by onDebugLog callback
+        // This callback only handles state updates and display
 
         // Render updated status bar (preserve waiting state for animation)
         renderStatus(elements, state, waitingState);
@@ -459,6 +453,29 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         orchestratorCount = 0;
         sceneState.demonCount = 0;
         doRenderTileScene();
+      },
+
+      onDebugLog: (entry: DebugLogEntry) => {
+        if (!logbook) return;
+
+        // Log to the logbook based on entry type
+        switch (entry.type) {
+          case 'message':
+            logbook.addMessage(entry.speaker || 'unknown', entry.text, entry.filtered);
+            break;
+          case 'tool':
+            // Parse tool details if available
+            const toolDetails = entry.details as { tool: string; count: number } | undefined;
+            if (toolDetails) {
+              logbook.addToolUse(toolDetails.tool, toolDetails.count, entry.speaker);
+            } else {
+              logbook.addToolUse(entry.text, 1, entry.speaker);
+            }
+            break;
+          case 'system':
+            logbook.addSystemEvent(entry.text, entry.details);
+            break;
+        }
       },
     };
   }
