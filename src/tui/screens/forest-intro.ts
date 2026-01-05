@@ -45,7 +45,7 @@ const WHITE = '\x1b[97m';
 const BG_BLACK = '\x1b[40m';
 
 // True color theme colors (RGB)
-const COLOR_ARBITER = '\x1b[38;2;100;255;255m';  // Bright cyan for THE ARBITER
+const COLOR_ARBITER = '\x1b[38;2;100;255;100m';  // Green for THE ARBITER
 const COLOR_WAS = '\x1b[38;2;100;200;255m';      // Blue-cyan for "WAS"
 const COLOR_IS = '\x1b[38;2;200;100;255m';       // Purple for "IS"
 
