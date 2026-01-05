@@ -2,10 +2,10 @@
 // RPG-style terminal interface with wizard council theme
 
 import blessed from 'blessed';
-import { AppState, toRoman } from '../state.js';
+import { AppState, toRoman, updateArbiterContext, updateOrchestratorContext, updateOrchestratorTool } from '../state.js';
 import { RouterCallbacks } from '../router.js';
 import { createLayout, LayoutElements, appendToLogbook, getTileAreaPosition } from './layout.js';
-import { renderScene, renderStatus, renderAll, advanceAnimation, resetAnimation, WaitingState } from './render.js';
+import { renderStatus, advanceAnimation, resetAnimation, WaitingState } from './render.js';
 import { Logbook } from './logbook.js';
 import { AnimationTimer, setAnimationActive } from './animations.js';
 import { Tileset, loadTileset, HIDE_CURSOR, SHOW_CURSOR } from './tileset.js';
@@ -278,8 +278,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Set up logbook toggle
     setupLogbookToggle();
 
-    // Initial render
-    renderAll(elements, state);
+    // Initial render - just status bar and tile scene (chat log is empty initially)
+    renderStatus(elements, state, waitingState);
     doRenderTileScene();
 
     // Load tileset asynchronously and render when ready
@@ -298,7 +298,7 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Handle resize
     elements.screen.on('resize', () => {
       if (elements) {
-        renderAll(elements, state);
+        renderStatus(elements, state, waitingState);
         doRenderTileScene();
       }
     });
@@ -343,13 +343,13 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on human
         sceneState.focusTarget = 'human';
 
-        // Log the message
+        // Log the message to logbook
         if (logbook) {
           logbook.addMessage('human', text);
         }
 
-        // Render updated scene immediately so human message appears before response
-        renderScene(elements, state);
+        // Append to AIM-style chat log
+        elements.chatLog.log('{green-fg}You:{/green-fg} ' + text);
         doRenderTileScene();
       },
 
@@ -359,13 +359,13 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on arbiter
         sceneState.focusTarget = 'arbiter';
 
-        // Log the message
+        // Log the message to logbook
         if (logbook) {
           logbook.addMessage('arbiter', text);
         }
 
-        // Render updated scene
-        renderScene(elements, state);
+        // Append to AIM-style chat log
+        elements.chatLog.log('{yellow-fg}Arbiter:{/yellow-fg} ' + text);
         doRenderTileScene();
       },
 
@@ -375,18 +375,24 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         // Update scene state - focus on demon
         sceneState.focusTarget = 'demon';
 
-        // Log the message with Roman numeral
+        // Log the message with Roman numeral to logbook
         if (logbook) {
           logbook.addMessage(`Orchestrator ${toRoman(orchestratorNumber)}`, text);
         }
 
-        // Render updated scene
-        renderScene(elements, state);
+        // Append to AIM-style chat log
+        elements.chatLog.log('{cyan-fg}Wizard ' + toRoman(orchestratorNumber) + ':{/cyan-fg} ' + text);
         doRenderTileScene();
       },
 
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
         if (!elements || !isRunning) return;
+
+        // Update state with new context percentages
+        updateArbiterContext(state, arbiterPercent);
+        if (orchestratorPercent !== null) {
+          updateOrchestratorContext(state, orchestratorPercent);
+        }
 
         // Log the context update
         if (logbook) {
@@ -400,6 +406,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
 
       onToolUse: (tool: string, count: number) => {
         if (!elements || !isRunning) return;
+
+        // Update state with tool information
+        updateOrchestratorTool(state, tool, count);
 
         // Log the tool use
         if (logbook) {
@@ -424,8 +433,7 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
           logbook.addModeChange(mode);
         }
 
-        // Re-render scene to move Arbiter position
-        renderScene(elements, state);
+        // Re-render tile scene to move Arbiter position
         doRenderTileScene();
       },
 

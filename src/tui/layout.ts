@@ -10,7 +10,7 @@ import blessed from 'blessed';
 export interface LayoutElements {
   screen: blessed.Widgets.Screen;
   titleBox: blessed.Widgets.BoxElement;
-  conversationBox: blessed.Widgets.BoxElement;  // This is the stage box (main rendering area)
+  chatLog: blessed.Widgets.Log;  // AIM-style scrollable chat log
   statusBox: blessed.Widgets.BoxElement;
   inputBox: blessed.Widgets.TextareaElement;
   // Logbook overlay (toggled with Ctrl+O)
@@ -120,57 +120,37 @@ export function createLayout(): LayoutElements {
   // Set initial title content (using titleBox width = 33% of screen)
   updateTitleContent(titleBox, Math.floor((screen.width as number) / 3));
 
-  // Stage box - main rendering area for sprites, speech bubbles, etc.
-  // Named conversationBox for backward compatibility
-  // Left 1/3 of screen for blessed chat panel
-  const conversationBox = blessed.box({
+  // AIM-style chat log - scrollable message history
+  const chatLog = blessed.log({
     parent: screen,
-    top: 4,
+    top: 4,  // Below title
     left: 0,
     width: '33%',
-    height: '100%-11', // Leave room for status (4 lines) and input (3 lines)
-    content: '',
-    tags: true,
+    height: '100%-13',  // Leave room for title (4) + status (4) + input (5)
     scrollable: true,
     alwaysScroll: true,
     scrollbar: {
-      ch: '\u2588', // █
-      style: {
-        fg: COLORS.white,
-      },
+      ch: '\u2502',  // │
+      style: { fg: 'cyan' }
     },
     mouse: true,
     keys: true,
-    vi: true,
+    vi: false,
+    tags: true,  // For color formatting
     style: {
-      fg: COLORS.white,
+      fg: 'white',
       bg: 'black',
-      border: {
-        fg: COLORS.white,
-      },
     },
     border: {
       type: 'line',
     },
+    label: ' Chat ',
   });
-
-  // Override border characters to use double-line box drawing
-  conversationBox.border = {
-    type: 'line',
-    ch: ' ',
-    top: BOX_CHARS.horizontal,
-    bottom: BOX_CHARS.horizontal,
-    left: BOX_CHARS.vertical,
-    right: BOX_CHARS.vertical,
-  } as blessed.Widgets.Border;
-
-  // Add scene title inside the stage box (using conversationBox width = 33% of screen)
-  updateStageTitle(conversationBox, Math.floor((screen.width as number) / 3));
 
   // Status bar area (4 lines above input) - left 1/3 of screen
   const statusBox = blessed.box({
     parent: screen,
-    bottom: 3,
+    bottom: 5,  // Above the 5-line input box
     left: 0,
     width: '33%',
     height: 4,
@@ -182,46 +162,38 @@ export function createLayout(): LayoutElements {
     },
   });
 
-  // Input box at the bottom (3 lines) - left 1/3 of screen
+  // Input box at the bottom (5 lines) - left 1/3 of screen
+  // Taller for multi-line input and better paste support
   const inputBox = blessed.textarea({
     parent: screen,
     bottom: 0,
-    left: 2,  // Leave room for "> " prompt
-    width: '33%-2',
-    height: 3,
+    left: 0,
+    width: '33%',
+    height: 5,
     inputOnFocus: true,
     mouse: true,
     keys: true,
     vi: false,  // Disable vi mode for normal editing
+    scrollable: true,  // Allow scrolling if content is long
+    alwaysScroll: true,
+    tags: false,  // Don't interpret tags in input
     style: {
       fg: COLORS.white,
       bg: 'black',
     },
-  });
-
-
-  // Create a fixed prompt label "> " that sits to the left of the input
-  blessed.text({
-    parent: screen,
-    bottom: 1,
-    left: 0,
-    width: 2,
-    height: 1,
-    content: '> ',
-    style: {
-      fg: COLORS.white,
-      bg: 'black',
+    border: {
+      type: 'line',
     },
+    label: ' > ',
   });
 
   // Create logbook overlay (hidden by default)
   const { logbookOverlay, logbookContent } = createLogbookOverlay(screen);
 
-  // Handle screen resize to update title width and stage title
+  // Handle screen resize to update title width
   screen.on('resize', () => {
     const chatWidth = Math.floor((screen.width as number) / 3);
     updateTitleContent(titleBox, chatWidth);
-    updateStageTitle(conversationBox, chatWidth);
     screen.render();
   });
 
@@ -272,7 +244,7 @@ export function createLayout(): LayoutElements {
   return {
     screen,
     titleBox,
-    conversationBox,
+    chatLog,
     statusBox,
     inputBox,
     logbookOverlay,
@@ -440,21 +412,6 @@ function updateTitleContent(titleBox: blessed.Widgets.BoxElement, width: number)
   );
 }
 
-/**
- * Updates the stage box with a scene title at the top
- * "THE WIZARD'S CIRCLE" centered within the stage area
- */
-function updateStageTitle(stageBox: blessed.Widgets.BoxElement, width: number): void {
-  const sceneTitle = 'THE WIZARD\'S CIRCLE';
-  const effectiveWidth = Math.max(width - 6, 74);
-  const padding = Math.max(0, Math.floor((effectiveWidth - sceneTitle.length) / 2));
-
-  // Set the label for the stage box
-  stageBox.setLabel({
-    text: ` {bold}${sceneTitle}{/bold} `,
-    side: 'center',
-  });
-}
 
 /**
  * Creates the input prompt line with box drawing characters

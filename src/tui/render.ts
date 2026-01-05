@@ -397,44 +397,16 @@ function renderRightZone(
 }
 
 /**
- * Renders the RPG-style scene with Arbiter, campfire, wizards, and speech bubbles
- * Uses a zone-based approach: LEFT (human+bubble) | CENTER (arbiter+fire) | RIGHT (wizard)
- * This is the main scene render function that replaces the old conversation rendering
+ * Renders the RPG-style scene (DEPRECATED - now using AIM-style chat log)
+ * Kept for backward compatibility but does nothing since chatLog handles messages
  */
 export function renderScene(elements: LayoutElements, state: AppState): void {
-  const { conversationBox, screen } = elements;
-
-  // Get dimensions
-  const stageWidth = Math.max((screen.width as number) - 4, 76);
-  const stageHeight = Math.max((conversationBox.height as number) - 2, 20);
-
-  // Define zone widths - proportional split
-  const leftZoneWidth = Math.floor(stageWidth * 0.30);   // 30% for human/bubble
-  const centerZoneWidth = Math.floor(stageWidth * 0.40); // 40% for arbiter/fire
-  const rightZoneWidth = stageWidth - leftZoneWidth - centerZoneWidth; // rest for wizard
-
-  // Render each zone as array of lines
-  const leftLines = renderLeftZone(state, leftZoneWidth, stageHeight);
-  const centerLines = renderCenterZone(state, centerZoneWidth, stageHeight);
-  const rightLines = renderRightZone(state, rightZoneWidth, stageHeight);
-
-  // Combine zones line by line
-  const outputLines: string[] = [];
-  for (let y = 0; y < stageHeight; y++) {
-    const leftPart = padLineToWidth(leftLines[y] || '', leftZoneWidth);
-    const centerPart = padLineToWidth(centerLines[y] || '', centerZoneWidth);
-    const rightPart = padLineToWidth(rightLines[y] || '', rightZoneWidth);
-
-    outputLines.push(leftPart + centerPart + rightPart);
-  }
-
-  conversationBox.setContent(outputLines.join('\n'));
-  screen.render();
+  // No-op: Chat messages now go directly to chatLog via chatLog.log()
+  elements.screen.render();
 }
 
 /**
- * Renders the conversation log - redirects to renderScene for backward compatibility
- * This is the legacy function that other parts of the codebase call
+ * Renders the conversation log (DEPRECATED - now using AIM-style chat log)
  */
 export function renderConversation(elements: LayoutElements, state: AppState): void {
   renderScene(elements, state);
