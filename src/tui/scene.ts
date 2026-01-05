@@ -34,6 +34,7 @@ export interface SceneState {
   selectedCharacter: number; // Tile index 190-197 for selected human character
   workingTarget: 'arbiter' | 'conjuring' | null; // Who is currently processing
   hopFrame: boolean; // Alternates true/false for hop animation
+  bubbleFrame: boolean; // Alternates for bubble visibility
 }
 
 /**
@@ -127,6 +128,7 @@ export function createInitialSceneState(): SceneState {
     selectedCharacter: TILE.HUMAN_1,
     workingTarget: null,
     hopFrame: false,
+    bubbleFrame: false,
   };
 }
 
@@ -139,13 +141,15 @@ export function createInitialSceneState(): SceneState {
  *
  * Scene Layout:
  * - Row 0-1: Trees on edges (col 0 and 6), grass elsewhere
- * - Row 2: Human at col 1, Arbiter at col 2-4 (based on arbiterPos), Spellbook at col 5, tree at col 6
+ * - Row 2: Human at col 1, Arbiter at col 2-4 (based on arbiterPos), Cauldron at col 5, tree at col 6
  * - Row 3: Tree at col 0, grass, campfire at col 5, tree at col 6
  * - Row 4-5: Trees at col 0 and 6, grass elsewhere
  * - Demons spawn around campfire at col 5-6, rows 1-3
+ * - Smoke bubbles appear above cauldron when working
+ * - Spellbook appears to the left of arbiter when at position 2
  */
 export function createScene(state: SceneState): TileSpec[][] {
-  const { arbiterPos, demonCount, selectedCharacter } = state;
+  const { arbiterPos, demonCount, selectedCharacter, workingTarget, bubbleFrame } = state;
   const arbiterCol = 2 + arbiterPos;
   const arbiterRow = 2;
 
@@ -176,9 +180,20 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = selectedCharacter;
       }
 
-      // Spellbook (row 2, col 5)
-      if (row === 2 && col === 5) {
+      // Spellbook appears to the left of arbiter when at position 2 (col 4)
+      // Spellbook at col 3 (to arbiter's left)
+      if (arbiterPos === 2 && row === 2 && col === 3) {
         tile = TILE.SPELLBOOK;
+      }
+
+      // Cauldron (row 2, col 5)
+      if (row === 2 && col === 5) {
+        tile = TILE.CAULDRON;
+      }
+
+      // Smoke/bubbles above cauldron when working and bubbleFrame is true
+      if (workingTarget && bubbleFrame && row === 1 && col === 5) {
+        tile = TILE.SMOKE;
       }
 
       // Campfire (row 3, col 5)

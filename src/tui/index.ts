@@ -62,6 +62,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
   // Track orchestrator count for demon spawning
   let orchestratorCount = 0;
 
+  // Track when hopping started (for 3-second limit)
+  let hopStartTime: number | null = null;
+
   /**
    * Starts the waiting animation
    */
@@ -72,6 +75,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
 
     // Update scene state for hop animation
     sceneState.workingTarget = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
+
+    // Reset hop start time so hopping begins fresh
+    hopStartTime = null;
 
     // Render immediately with the new waiting state
     if (elements && isRunning) {
@@ -90,6 +96,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Clear scene state for hop animation
     sceneState.workingTarget = null;
     sceneState.hopFrame = false;
+    sceneState.bubbleFrame = false;
+    hopStartTime = null;
 
     // Render status without waiting state
     if (elements && isRunning) {
@@ -275,9 +283,23 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Create animation timer for campfire/gem animations
     animationTimer = new AnimationTimer(() => {
       if (elements && isRunning) {
-        // Toggle hop frame for bouncing animation when working
         if (sceneState.workingTarget) {
-          sceneState.hopFrame = !sceneState.hopFrame;
+          // Bubbles ALWAYS animate while anyone is working
+          sceneState.bubbleFrame = !sceneState.bubbleFrame;
+
+          // Hopping only for first 3 seconds
+          if (hopStartTime === null) {
+            hopStartTime = Date.now();
+          }
+          if (Date.now() - hopStartTime < 3000) {
+            sceneState.hopFrame = !sceneState.hopFrame;
+          } else {
+            sceneState.hopFrame = false;
+          }
+        } else {
+          hopStartTime = null;
+          sceneState.hopFrame = false;
+          sceneState.bubbleFrame = false;
         }
 
         // Re-render status bar for animated dots
