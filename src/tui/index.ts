@@ -121,7 +121,6 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     const rendered = renderTileScene(
       tileset,
       scene,
-      sceneState.focusTarget,
       sceneState.workingTarget,
       sceneState.hopFrame
     );
@@ -403,9 +402,6 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
       onHumanMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
-        // Update scene state - focus on human
-        sceneState.focusTarget = 'human';
-
         // Log the message to logbook (human messages don't come via onDebugLog)
         if (logbook) {
           logbook.addMessage('human', text);
@@ -419,9 +415,6 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
       onArbiterMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
-        // Update scene state - focus on arbiter
-        sceneState.focusTarget = 'arbiter';
-
         // Note: Logging is handled by onDebugLog callback
         // This callback only handles main chat display
 
@@ -432,9 +425,6 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
 
       onOrchestratorMessage: (orchestratorNumber: number, text: string) => {
         if (!elements || !isRunning) return;
-
-        // Update scene state - focus on demon
-        sceneState.focusTarget = 'demon';
 
         // Note: Logging is handled by onDebugLog callback
         // This callback only handles main chat display
@@ -481,9 +471,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         if (!elements || !isRunning) return;
 
         // Update scene state - arbiter position based on mode
-        // 0 = near human (facing human), 2 = near spellbook (facing orchestrators)
+        // 0 = near human (facing human), 2 = near cauldron (facing orchestrators)
         sceneState.arbiterPos = mode === 'human_to_arbiter' ? 0 : 2;
-        sceneState.focusTarget = null;
 
         // Log the mode change
         if (logbook) {

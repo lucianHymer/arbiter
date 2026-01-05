@@ -16,7 +16,6 @@ import {
   extractTile,
   compositeTiles,
   renderTile,
-  compositeWithFocus,
   mirrorTile,
 } from './tileset.js';
 
@@ -228,73 +227,30 @@ export function createScene(state: SceneState): TileSpec[][] {
 // ============================================================================
 
 /**
- * Get focus position based on target and arbiter position
- */
-function getFocusPosition(
-  focusTarget: 'human' | 'arbiter' | 'demon' | null,
-  arbiterPos: 0 | 1 | 2,
-  demonCount: number
-): { row: number; col: number } | null {
-  if (!focusTarget) return null;
-
-  switch (focusTarget) {
-    case 'human':
-      return { row: 2, col: 1 };
-    case 'arbiter':
-      return { row: 2, col: 2 + arbiterPos };
-    case 'demon':
-      if (demonCount > 0) {
-        // Focus first demon (row 2, col 6)
-        return { row: 2, col: 6 };
-      }
-      return null;
-    default:
-      return null;
-  }
-}
-
-/**
  * Render the scene to an ANSI string
  */
 export function renderScene(
   tileset: Tileset,
   scene: TileSpec[][],
-  focusTarget: 'human' | 'arbiter' | 'demon' | null,
   workingTarget: 'arbiter' | 'conjuring' | null = null,
   hopFrame: boolean = false
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
 
-  // Determine arbiter position from scene (needed for focus position)
-  let arbiterPos: 0 | 1 | 2 = 1;
+  // Scan scene for arbiter position and demon count (needed for hop animation)
+  let arbiterCol = 3; // Default center
   let demonCount = 0;
-
-  // Scan scene for arbiter position and demon count
   for (let row = 0; row < scene.length; row++) {
     for (let col = 0; col < scene[row].length; col++) {
       const tileSpec = scene[row][col];
       if (typeof tileSpec === 'object' && tileSpec.tile === TILE.ARBITER) {
-        arbiterPos = (col - 2) as 0 | 1 | 2;
+        arbiterCol = col;
       }
-      // Count demons
-      if (
-        typeof tileSpec === 'number' &&
-        tileSpec >= TILE.DEMON_1 &&
-        tileSpec <= TILE.DEMON_5
-      ) {
+      if (typeof tileSpec === 'number' && tileSpec >= TILE.DEMON_1 && tileSpec <= TILE.DEMON_5) {
         demonCount++;
       }
     }
-  }
-
-  // Calculate focus position
-  const focusPos = getFocusPosition(focusTarget, arbiterPos, demonCount);
-
-  // Get focus overlay pixels if needed
-  let focusPixels: RGB[][] | null = null;
-  if (focusTarget && focusPos) {
-    focusPixels = extractTile(tileset, TILE.FOCUS);
   }
 
   const renderedTiles: string[][][] = [];
@@ -313,23 +269,7 @@ export function renderScene(
         mirrored = tileSpec.mirrored;
       }
 
-      // Check if this tile should have focus overlay
-      const hasFocus = focusPos && focusPos.row === row && focusPos.col === col;
-
-      if (hasFocus && focusPixels) {
-        // Render tile with focus overlay (not cached)
-        let charPixels = extractTile(tileset, tileIndex);
-        if (tileIndex >= 80) {
-          charPixels = compositeTiles(charPixels, grassPixels, 1);
-        }
-        if (mirrored) {
-          charPixels = mirrorTile(charPixels);
-        }
-        const withFocus = compositeWithFocus(charPixels, focusPixels, 1);
-        renderedRow.push(renderTile(withFocus));
-      } else {
-        renderedRow.push(getTileRender(tileset, grassPixels, tileIndex, mirrored));
-      }
+      renderedRow.push(getTileRender(tileset, grassPixels, tileIndex, mirrored));
     }
     renderedTiles.push(renderedRow);
   }
@@ -338,8 +278,8 @@ export function renderScene(
   let hopTilePos: { row: number; col: number } | null = null;
   if (workingTarget && hopFrame) {
     if (workingTarget === 'arbiter') {
-      // Arbiter is at row 2, col depends on arbiterPos
-      hopTilePos = { row: 2, col: 2 + arbiterPos };
+      // Arbiter is at row 2, col from scene scan
+      hopTilePos = { row: 2, col: arbiterCol };
     } else if (workingTarget === 'conjuring' && demonCount > 0) {
       // First demon is at row 2, col 6
       hopTilePos = { row: 2, col: 6 };
