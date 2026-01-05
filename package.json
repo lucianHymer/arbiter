@@ -7,11 +7,16 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test:headless": "tsx src/test-headless.ts"
+    "test:headless": "tsx src/test-headless.ts",
+    "test:tiles": "tsx src/tui/tile-test.ts",
+    "test:tiles:raw": "tsx src/tui/tile-test-raw.ts",
+    "demo:scene": "tsx src/tui/tile-scene-demo.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",
     "blessed": "^0.1.81",
+    "sharp": "^0.34.5",
+    "terminal-kit": "^3.1.2",
     "zod": "^3.22.4"
   },
   "devDependencies": {

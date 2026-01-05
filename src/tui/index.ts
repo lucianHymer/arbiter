@@ -4,10 +4,12 @@
 import blessed from 'blessed';
 import { AppState, toRoman } from '../state.js';
 import { RouterCallbacks } from '../router.js';
-import { createLayout, LayoutElements, appendToLogbook } from './layout.js';
+import { createLayout, LayoutElements, appendToLogbook, getTileAreaPosition } from './layout.js';
 import { renderScene, renderStatus, renderAll, advanceAnimation, resetAnimation, WaitingState } from './render.js';
 import { Logbook } from './logbook.js';
 import { AnimationTimer, setAnimationActive } from './animations.js';
+import { Tileset, loadTileset, HIDE_CURSOR, SHOW_CURSOR } from './tileset.js';
+import { SceneState, createScene, renderScene as renderTileScene, createInitialSceneState } from './scene.js';
 
 /**
  * TUI interface - main entry point for the terminal UI
@@ -27,13 +29,17 @@ export interface TUI {
   stopWaiting(): void;
 }
 
+// Module-level tileset (loaded asynchronously)
+let tileset: Tileset | null = null;
+
 /**
  * Creates a TUI instance for the Arbiter system
  *
  * @param state - The application state to render
+ * @param selectedCharacter - Optional tile index (190-197) for the selected human character
  * @returns TUI interface for controlling the terminal UI
  */
-export function createTUI(state: AppState): TUI {
+export function createTUI(state: AppState, selectedCharacter?: number): TUI {
   let elements: LayoutElements | null = null;
   let inputCallback: ((text: string) => void) | null = null;
   let isRunning = false;
@@ -44,6 +50,17 @@ export function createTUI(state: AppState): TUI {
 
   // Animation timer for campfire/gem animations
   let animationTimer: AnimationTimer | null = null;
+
+  // Scene state for tile rendering
+  let sceneState: SceneState = createInitialSceneState();
+
+  // Set selected character if provided
+  if (selectedCharacter !== undefined) {
+    sceneState.selectedCharacter = selectedCharacter;
+  }
+
+  // Track orchestrator count for demon spawning
+  let orchestratorCount = 0;
 
   /**
    * Starts the waiting animation
@@ -70,6 +87,24 @@ export function createTUI(state: AppState): TUI {
     // Render status without waiting state
     if (elements && isRunning) {
       renderStatus(elements, state, 'none');
+    }
+  }
+
+  /**
+   * Renders the tile scene to the right portion of the screen
+   * Uses direct stdout writes over the blessed screen
+   */
+  function doRenderTileScene(): void {
+    if (!tileset || !elements || !isRunning) return;
+
+    const tileArea = getTileAreaPosition(elements.screen);
+    const scene = createScene(sceneState);
+    const rendered = renderTileScene(tileset, scene, sceneState.focusTarget);
+
+    // Split rendered into lines and write each at correct position
+    const lines = rendered.split('\n');
+    for (let i = 0; i < lines.length && i < tileArea.height; i++) {
+      process.stdout.write(`\x1b[${tileArea.y + i};${tileArea.x}H${lines[i]}`);
     }
   }
 
@@ -213,6 +248,9 @@ export function createTUI(state: AppState): TUI {
   function start(): void {
     if (isRunning) return;
 
+    // Hide cursor during rendering
+    process.stdout.write(HIDE_CURSOR);
+
     // Create the layout
     elements = createLayout();
     isRunning = true;
@@ -226,6 +264,8 @@ export function createTUI(state: AppState): TUI {
       if (elements && isRunning) {
         // Re-render status bar for animated dots
         renderStatus(elements, state, waitingState);
+        // Also re-render tile scene
+        doRenderTileScene();
       }
     }, 400);
 
@@ -240,11 +280,26 @@ export function createTUI(state: AppState): TUI {
 
     // Initial render
     renderAll(elements, state);
+    doRenderTileScene();
+
+    // Load tileset asynchronously and render when ready
+    loadTileset().then((ts) => {
+      tileset = ts;
+      if (isRunning) {
+        doRenderTileScene();
+      }
+    }).catch((err) => {
+      // Log tileset loading error but continue without tile rendering
+      if (logbook) {
+        logbook.addSystemEvent(`Failed to load tileset: ${err.message}`);
+      }
+    });
 
     // Handle resize
     elements.screen.on('resize', () => {
       if (elements) {
         renderAll(elements, state);
+        doRenderTileScene();
       }
     });
   }
@@ -272,6 +327,9 @@ export function createTUI(state: AppState): TUI {
     elements.screen.destroy();
     elements = null;
     isRunning = false;
+
+    // Show cursor again
+    process.stdout.write(SHOW_CURSOR);
   }
 
   /**
@@ -282,6 +340,9 @@ export function createTUI(state: AppState): TUI {
       onHumanMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
+        // Update scene state - focus on human
+        sceneState.focusTarget = 'human';
+
         // Log the message
         if (logbook) {
           logbook.addMessage('human', text);
@@ -289,10 +350,14 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated scene immediately so human message appears before response
         renderScene(elements, state);
+        doRenderTileScene();
       },
 
       onArbiterMessage: (text: string) => {
         if (!elements || !isRunning) return;
+
+        // Update scene state - focus on arbiter
+        sceneState.focusTarget = 'arbiter';
 
         // Log the message
         if (logbook) {
@@ -301,10 +366,14 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated scene
         renderScene(elements, state);
+        doRenderTileScene();
       },
 
       onOrchestratorMessage: (orchestratorNumber: number, text: string) => {
         if (!elements || !isRunning) return;
+
+        // Update scene state - focus on demon
+        sceneState.focusTarget = 'demon';
 
         // Log the message with Roman numeral
         if (logbook) {
@@ -313,6 +382,7 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated scene
         renderScene(elements, state);
+        doRenderTileScene();
       },
 
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
@@ -325,6 +395,7 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated status bar (preserve waiting state for animation)
         renderStatus(elements, state, waitingState);
+        doRenderTileScene();
       },
 
       onToolUse: (tool: string, count: number) => {
@@ -337,10 +408,16 @@ export function createTUI(state: AppState): TUI {
 
         // Render updated status bar (preserve waiting state for animation)
         renderStatus(elements, state, waitingState);
+        doRenderTileScene();
       },
 
       onModeChange: (mode: AppState['mode']) => {
         if (!elements || !isRunning) return;
+
+        // Update scene state - arbiter position based on mode
+        // 0 = near human (facing human), 2 = near spellbook (facing orchestrators)
+        sceneState.arbiterPos = mode === 'human_to_arbiter' ? 0 : 2;
+        sceneState.focusTarget = null;
 
         // Log the mode change
         if (logbook) {
@@ -349,14 +426,31 @@ export function createTUI(state: AppState): TUI {
 
         // Re-render scene to move Arbiter position
         renderScene(elements, state);
+        doRenderTileScene();
       },
 
       onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
         startWaiting(waitingFor);
+        doRenderTileScene();
       },
 
       onWaitingStop: () => {
         stopWaiting();
+        doRenderTileScene();
+      },
+
+      onOrchestratorSpawn: (orchestratorNumber: number) => {
+        // Update demon count (max 5)
+        orchestratorCount = Math.min(orchestratorNumber, 5);
+        sceneState.demonCount = orchestratorCount;
+        doRenderTileScene();
+      },
+
+      onOrchestratorDisconnect: () => {
+        // Reset demon count
+        orchestratorCount = 0;
+        sceneState.demonCount = 0;
+        doRenderTileScene();
       },
     };
   }

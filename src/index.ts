@@ -4,6 +4,7 @@
 import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
 import { createTUI, TUI } from './tui/index.js';
+import { showCharacterSelect } from './tui/screens/character-select.js';
 
 /**
  * Session information for persistence on exit
@@ -79,11 +80,14 @@ async function main(): Promise<void> {
   });
 
   try {
+    // Show character selection screen first
+    const selectedCharacter = await showCharacterSelect();
+
     // Create initial application state
     state = createInitialState();
 
-    // Create TUI with state reference
-    tui = createTUI(state);
+    // Create TUI with state reference and selected character
+    tui = createTUI(state, selectedCharacter);
 
     // Get router callbacks from TUI
     // These callbacks update the display when router events occur

@@ -58,6 +58,10 @@ export type RouterCallbacks = {
   onWaitingStart?: (waitingFor: 'arbiter' | 'orchestrator') => void;
   /** Called when waiting for a response stops */
   onWaitingStop?: () => void;
+  /** Called when an orchestrator is spawned (for tile scene demon spawning) */
+  onOrchestratorSpawn?: (orchestratorNumber: number) => void;
+  /** Called when orchestrators are disconnected (for tile scene demon removal) */
+  onOrchestratorDisconnect?: () => void;
 };
 
 // Maximum context window size (200K tokens)
@@ -185,6 +189,9 @@ export class Router {
 
         // Update context display (no orchestrator)
         this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
+
+        // Notify about orchestrator disconnect (for tile scene demon removal)
+        this.callbacks.onOrchestratorDisconnect?.();
       },
     };
 
@@ -323,6 +330,9 @@ export class Router {
     // Switch mode
     setMode(this.state, "arbiter_to_orchestrator");
     this.callbacks.onModeChange("arbiter_to_orchestrator");
+
+    // Notify about orchestrator spawn (for tile scene demon spawning)
+    this.callbacks.onOrchestratorSpawn?.(number);
 
     // Process orchestrator messages
     await this.processOrchestratorMessages(this.orchestratorQuery);

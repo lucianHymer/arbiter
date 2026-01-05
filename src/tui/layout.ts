@@ -19,6 +19,43 @@ export interface LayoutElements {
 }
 
 /**
+ * Position and dimensions for the tile rendering area (right 2/3 of screen)
+ * Used for direct process.stdout.write() tile rendering
+ */
+export interface TileAreaPosition {
+  x: number;      // Column where tile area starts (1-based for ANSI)
+  y: number;      // Row where tile area starts (1-based for ANSI)
+  width: number;  // Width in characters
+  height: number; // Height in rows
+}
+
+/**
+ * Gets the position and dimensions of the tile rendering area
+ * The tile area occupies the right 2/3 of the screen, below the title
+ *
+ * @param screen - The blessed screen to calculate position from
+ * @returns TileAreaPosition with x, y, width, height for direct stdout rendering
+ */
+export function getTileAreaPosition(screen: blessed.Widgets.Screen): TileAreaPosition {
+  const screenWidth = screen.width as number;
+  const screenHeight = screen.height as number;
+
+  // Tile area starts at 1/3 of screen width (after the chat panel)
+  const x = Math.floor(screenWidth / 3) + 1; // +1 for 1-based ANSI positioning
+
+  // Tile area starts below the title (row 4, which is after 4-line title)
+  const y = 5; // 1-based, so row 5 is after 4-line title
+
+  // Width is remaining 2/3 of screen
+  const width = screenWidth - Math.floor(screenWidth / 3);
+
+  // Height is screen height minus title (4) and status/input (7)
+  const height = screenHeight - 11;
+
+  return { x, y, width, height };
+}
+
+/**
  * Box drawing characters for roguelike aesthetic
  * Double-line characters for main borders
  */
@@ -65,12 +102,12 @@ export function createLayout(): LayoutElements {
     autoPadding: false,
   });
 
-  // Title box at the top (4 lines)
+  // Title box at the top (4 lines) - left 1/3 of screen
   const titleBox = blessed.box({
     parent: screen,
     top: 0,
     left: 0,
-    width: '100%',
+    width: '33%',
     height: 4,
     content: '',
     tags: true,
@@ -80,16 +117,17 @@ export function createLayout(): LayoutElements {
     },
   });
 
-  // Set initial title content
-  updateTitleContent(titleBox, screen.width as number);
+  // Set initial title content (using titleBox width = 33% of screen)
+  updateTitleContent(titleBox, Math.floor((screen.width as number) / 3));
 
   // Stage box - main rendering area for sprites, speech bubbles, etc.
   // Named conversationBox for backward compatibility
+  // Left 1/3 of screen for blessed chat panel
   const conversationBox = blessed.box({
     parent: screen,
     top: 4,
     left: 0,
-    width: '100%',
+    width: '33%',
     height: '100%-11', // Leave room for status (4 lines) and input (3 lines)
     content: '',
     tags: true,
@@ -126,15 +164,15 @@ export function createLayout(): LayoutElements {
     right: BOX_CHARS.vertical,
   } as blessed.Widgets.Border;
 
-  // Add scene title inside the stage box
-  updateStageTitle(conversationBox, screen.width as number);
+  // Add scene title inside the stage box (using conversationBox width = 33% of screen)
+  updateStageTitle(conversationBox, Math.floor((screen.width as number) / 3));
 
-  // Status bar area (4 lines above input)
+  // Status bar area (4 lines above input) - left 1/3 of screen
   const statusBox = blessed.box({
     parent: screen,
     bottom: 3,
     left: 0,
-    width: '100%',
+    width: '33%',
     height: 4,
     content: '',
     tags: true,
@@ -144,12 +182,12 @@ export function createLayout(): LayoutElements {
     },
   });
 
-  // Input box at the bottom (3 lines)
+  // Input box at the bottom (3 lines) - left 1/3 of screen
   const inputBox = blessed.textarea({
     parent: screen,
     bottom: 0,
     left: 2,  // Leave room for "> " prompt
-    width: '100%-2',
+    width: '33%-2',
     height: 3,
     inputOnFocus: true,
     mouse: true,
@@ -181,8 +219,9 @@ export function createLayout(): LayoutElements {
 
   // Handle screen resize to update title width and stage title
   screen.on('resize', () => {
-    updateTitleContent(titleBox, screen.width as number);
-    updateStageTitle(conversationBox, screen.width as number);
+    const chatWidth = Math.floor((screen.width as number) / 3);
+    updateTitleContent(titleBox, chatWidth);
+    updateStageTitle(conversationBox, chatWidth);
     screen.render();
   });
 
