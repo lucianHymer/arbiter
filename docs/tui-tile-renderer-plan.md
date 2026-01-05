@@ -256,7 +256,26 @@ npm install -D @types/terminal-kit
 
 ## Known Bugs to Fix
 
-1. **Wizard context % always 0** - Check `src/router.ts` orchestrator context tracking
+1. **Wizard/Orchestrator context % always shows null/0**
+
+   **Diagnosis:** Two separate context trackers that aren't synchronized in `src/router.ts`:
+
+   - **Local variable** `currentContextPercent` (line ~257 in `startOrchestratorSession`):
+     - Used by PostToolUse hook via `getContextPercent` closure
+     - Starts at 0, updated by orchestratorCallbacks.onContextUpdate
+
+   - **State object** `state.currentOrchestrator.contextPercent`:
+     - Updated by result message handling (lines 592-608)
+     - Read when arbiter context updates (line 526: `orchPct = state.currentOrchestrator?.contextPercent ?? null`)
+
+   **The bug:** The hook reads from the LOCAL variable, but result messages update the STATE.
+   When `onContextUpdate` is called from arbiter messages, it reads `state.currentOrchestrator?.contextPercent`
+   which may not have been updated yet (or ever, if the paths don't connect).
+
+   **Fix approach:** Either:
+   - Remove the local variable and always read/write from `state.currentOrchestrator.contextPercent`
+   - Or ensure the local variable updates state, and state is read everywhere
+
 2. **Debug log mode** - D key toggle was just added, verify it works
 
 ## Resources
