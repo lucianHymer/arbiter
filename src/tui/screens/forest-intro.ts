@@ -42,11 +42,40 @@ const KEY_CTRL_C = '\u0003';
 // ANSI color codes
 const YELLOW = '\x1b[33m';
 const CYAN = '\x1b[36m';
+const MAGENTA = '\x1b[35m';
 const BRIGHT_YELLOW = '\x1b[93m';
 const BRIGHT_RED = '\x1b[91m';
 const BOLD = '\x1b[1m';
 const BG_BLACK = '\x1b[40m';
 const WHITE = '\x1b[97m';
+
+/**
+ * Apply rainbow colors to text (each character gets a different color from the spectrum)
+ */
+function rainbow(text: string): string {
+  const colors = [
+    [255, 100, 100], // red
+    [255, 200, 100], // orange
+    [255, 255, 100], // yellow
+    [100, 255, 100], // green
+    [100, 255, 255], // cyan
+    [100, 100, 255], // blue
+    [200, 100, 255], // purple
+    [255, 100, 255], // magenta
+  ];
+  let result = '';
+  let colorIndex = 0;
+  for (const char of text) {
+    if (char === ' ') {
+      result += char;
+    } else {
+      const [r, g, b] = colors[colorIndex % colors.length];
+      result += `\x1b[38;2;${r};${g};${b}m${char}`;
+      colorIndex++;
+    }
+  }
+  return result + RESET;
+}
 
 // Box-drawing characters for Zelda-style dialogue box
 const BOX_TOP_LEFT = '╔';
@@ -100,6 +129,11 @@ function createForestScene(characterTile: number | null, characterCol: number): 
       if (row === 4) {
         if (col === 0 || col === 6) tile = TILE.PINE_TREE;
         if (col === 1 || col === 5) tile = TILE.BARE_TREE;
+      }
+
+      // Add signpost near right edge, above path
+      if (row === 1 && col === 5) {
+        tile = 63; // Signpost tile
       }
 
       // Middle path row (row 2) - sparse grass for path ALL THE WAY THROUGH (col 0 to 6)
@@ -416,8 +450,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   // Character walks from left edge (col 0) to right edge (col 6) and STOPS there
   // -------------------------------------------------------------------------
 
-  // Walk from left (col 0) to right edge (col 6) - character stops at rightmost visible position
-  for (let col = 0; col <= SCENE_WIDTH - 1; col++) {
+  // Walk from left (col 0) to col 5 (next to the signpost)
+  for (let col = 0; col <= SCENE_WIDTH - 2; col++) {
     // Create scene with character at current position
     const walkScene = createForestScene(selectedCharacter, col);
     renderForestScene(tileset, trailTile, walkScene, sceneStartRow);
@@ -431,19 +465,19 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   // Character stays at right edge, wait for Enter here
   // -------------------------------------------------------------------------
 
-  // Render scene with character at rightmost position (col 6)
-  const finalScene = createForestScene(selectedCharacter, SCENE_WIDTH - 1);
+  // Render scene with character at col 5 (next to the signpost)
+  const finalScene = createForestScene(selectedCharacter, SCENE_WIDTH - 2);
   renderForestScene(tileset, trailTile, finalScene, sceneStartRow);
 
   // Render tile-based dialogue box with THE ARBITER full title reveal
-  // Use white text with bold for emphasis on key phrases
+  // Use colorful text for emphasis on key phrases
   renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
     `${WHITE}You approach the lair of${RESET}`,
     '',
     `${BOLD}${WHITE}THE ARBITER${RESET}`,
-    `${WHITE}OF THAT WHICH WAS,${RESET}`,
-    `${WHITE}THAT WHICH IS,${RESET}`,
-    `${WHITE}AND THAT WHICH SHALL COME TO BE${RESET}`,
+    `${WHITE}OF THAT WHICH \x1b[38;2;100;200;255mWAS\x1b[0m${WHITE},${RESET}`,
+    `${WHITE}THAT WHICH \x1b[38;2;200;100;255mIS\x1b[0m${WHITE},${RESET}`,
+    `${WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
     '',
     `${WHITE}Press Enter to continue...${RESET}`,
   ], dialogueBoxWidthTiles);
