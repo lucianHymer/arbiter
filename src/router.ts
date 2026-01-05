@@ -416,11 +416,14 @@ export class Router {
    * In human_to_arbiter mode, display to human
    */
   private async handleArbiterOutput(text: string): Promise<void> {
-    // Log the message
+    // Log the message (always, for history)
     addMessage(this.state, "arbiter", text);
 
-    // Notify callback
-    this.callbacks.onArbiterMessage(text);
+    // Only notify TUI when in human_to_arbiter mode
+    // When orchestrator is active, Arbiter should be "silent" (watching)
+    if (this.state.mode === "human_to_arbiter") {
+      this.callbacks.onArbiterMessage(text);
+    }
 
     // If we're in orchestrator mode, forward to the orchestrator
     if (
