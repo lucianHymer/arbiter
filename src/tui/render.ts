@@ -1,8 +1,30 @@
-// TUI rendering logic
-// Handles updating the display with agent outputs and system status
+// TUI rendering logic - RPG-style scene rendering
+// Renders the wizard's circle with Arbiter, campfire, and orchestrator wizards
 
 import { LayoutElements } from './layout.js';
 import { AppState, toRoman } from '../state.js';
+import {
+  ARBITER_SPRITE,
+  HUMAN_SPRITE,
+  createWizardSprite,
+  getSpriteWidth,
+} from './sprites.js';
+import {
+  getCampfireFrame,
+  getAnimatedDots,
+  getWizardGemFrame,
+  advanceAnimation as advanceAnimationInternal,
+  resetAnimation as resetAnimationInternal,
+  setAnimationActive,
+} from './animations.js';
+import {
+  createSpeechBubble,
+  addTailLeft,
+  addTailRight,
+  getBubbleWidth,
+  getBubbleHeight,
+  stripColorTags,
+} from './speech-bubble.js';
 
 /**
  * Box drawing characters for borders
@@ -32,173 +54,26 @@ const PROGRESS_CHARS = {
 const TOOL_INDICATOR = '\u25C8'; // ◈
 
 /**
- * Animation state for loading dots
- */
-let animationFrame = 0;
-
-/**
- * Generates animated dots text based on current animation frame
- * Cycles through: "Working." -> "Working.." -> "Working..."
- * @param baseText - The base text to animate (e.g., "Working" or "Waiting for Arbiter")
- * @returns The text with animated dots appended
- */
-export function getAnimatedDots(baseText: string): string {
-  const dotCount = (animationFrame % 3) + 1;
-  return baseText + '.'.repeat(dotCount);
-}
-
-/**
- * Advances the animation frame for the loading dots
- * Should be called by an interval timer
- */
-export function advanceAnimation(): void {
-  animationFrame = (animationFrame + 1) % 3;
-}
-
-/**
- * Resets the animation frame to 0
- */
-export function resetAnimation(): void {
-  animationFrame = 0;
-}
-
-/**
- * Renders the conversation log to the conversation box
- * Formats messages with speakers (You:, Arbiter:, Orchestrator I:, etc.)
- */
-export function renderConversation(elements: LayoutElements, state: AppState): void {
-  const { conversationBox, screen } = elements;
-  const lines: string[] = [];
-
-  // Get effective width for text wrapping
-  const effectiveWidth = Math.max((screen.width as number) - 6, 74);
-
-  for (const message of state.conversationLog) {
-    // Format speaker label
-    const speakerLabel = formatSpeakerLabel(message.speaker);
-
-    // Format and wrap the message text
-    const wrappedText = wrapText(message.text, effectiveWidth - speakerLabel.length - 2);
-    const textLines = wrappedText.split('\n');
-
-    // First line with speaker label
-    lines.push(`  ${speakerLabel} ${textLines[0]}`);
-
-    // Subsequent lines indented to align with first line
-    const indent = ' '.repeat(speakerLabel.length + 3);
-    for (let i = 1; i < textLines.length; i++) {
-      lines.push(`${indent}${textLines[i]}`);
-    }
-
-    // Add empty line between messages
-    lines.push('');
-  }
-
-  // Join lines and add vertical borders
-  const formattedContent = lines
-    .map(line => {
-      const paddedLine = line.padEnd(effectiveWidth, ' ');
-      return `${BOX_CHARS.vertical}${paddedLine}${BOX_CHARS.vertical}`;
-    })
-    .join('\n');
-
-  conversationBox.setContent(formattedContent);
-
-  // Auto-scroll to bottom
-  conversationBox.setScrollPerc(100);
-
-  screen.render();
-}
-
-/**
  * Waiting state enum for different waiting scenarios
  */
 export type WaitingState = 'none' | 'arbiter' | 'orchestrator';
 
 /**
- * Renders the status bar with context percentages and current tool
- *
- * When orchestrator is active:
- * ║  Arbiter ─────────────────────────────────────────────────── ██░░░░░░░░ 18%    ║
- * ║  Orchestrator I ──────────────────────────────────────────── ████████░░ 74%    ║
- * ║  ◈ Edit (12)                                                                   ║
- *
- * When no orchestrator (Arbiter speaks to human):
- * ║  Arbiter ─────────────────────────────────────────────────── ██░░░░░░░░ 18%    ║
- * ║  Awaiting your command.                                                        ║
- *
- * @param waitingState - Optional waiting state to show animated dots
+ * Re-export animation functions for backward compatibility
  */
-export function renderStatus(elements: LayoutElements, state: AppState, waitingState: WaitingState = 'none'): void {
-  const { statusBox, screen } = elements;
-  const effectiveWidth = Math.max((screen.width as number) - 2, 78);
+export function advanceAnimation(): void {
+  advanceAnimationInternal();
+}
 
-  // Status separator at top
-  const separator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.rightT;
-
-  // Progress bar width (10 characters for the bar)
-  const barWidth = 10;
-
-  // Build Arbiter status line
-  const arbiterLabel = 'Arbiter';
-  const arbiterBar = renderProgressBar(state.arbiterContextPercent, barWidth);
-  const arbiterPercent = `${Math.round(state.arbiterContextPercent)}%`.padStart(4);
-  const arbiterDashes = createDashLine(
-    effectiveWidth - arbiterLabel.length - barWidth - arbiterPercent.length - 8
-  );
-  const arbiterLine = `${BOX_CHARS.vertical}  ${arbiterLabel} ${arbiterDashes} ${arbiterBar} ${arbiterPercent}  ${BOX_CHARS.vertical}`;
-
-  let orchestratorLine: string;
-  let toolLine: string;
-
-  if (state.currentOrchestrator) {
-    // Orchestrator status line
-    const orchLabel = `Orchestrator ${toRoman(state.currentOrchestrator.number)}`;
-    const orchBar = renderProgressBar(state.currentOrchestrator.contextPercent, barWidth);
-    const orchPercent = `${Math.round(state.currentOrchestrator.contextPercent)}%`.padStart(4);
-    const orchDashes = createDashLine(
-      effectiveWidth - orchLabel.length - barWidth - orchPercent.length - 8
-    );
-    orchestratorLine = `${BOX_CHARS.vertical}  ${orchLabel} ${orchDashes} ${orchBar} ${orchPercent}  ${BOX_CHARS.vertical}`;
-
-    // Tool indicator line
-    if (state.currentOrchestrator.currentTool) {
-      const toolText = `${TOOL_INDICATOR} ${state.currentOrchestrator.currentTool} (${state.currentOrchestrator.toolCallCount})`;
-      const toolPadding = ' '.repeat(effectiveWidth - toolText.length - 2);
-      toolLine = `${BOX_CHARS.vertical}  ${toolText}${toolPadding}${BOX_CHARS.vertical}`;
-    } else if (waitingState === 'orchestrator') {
-      // Show animated dots when waiting for orchestrator response
-      const waitingText = getAnimatedDots('Working');
-      const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
-      toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
-    } else {
-      const waitingText = 'Working...';
-      const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
-      toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
-    }
-  } else if (waitingState === 'arbiter') {
-    // Waiting for Arbiter response - show animated dots
-    const waitingText = getAnimatedDots('Waiting for Arbiter');
-    const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
-    orchestratorLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
-    toolLine = `${BOX_CHARS.vertical}${' '.repeat(effectiveWidth)}${BOX_CHARS.vertical}`;
-  } else {
-    // No orchestrator - show awaiting message
-    const awaitingText = 'Awaiting your command.';
-    const awaitingPadding = ' '.repeat(effectiveWidth - awaitingText.length - 2);
-    orchestratorLine = `${BOX_CHARS.vertical}  ${awaitingText}${awaitingPadding}${BOX_CHARS.vertical}`;
-    toolLine = `${BOX_CHARS.vertical}${' '.repeat(effectiveWidth)}${BOX_CHARS.vertical}`;
-  }
-
-  statusBox.setContent(`${separator}\n${arbiterLine}\n${orchestratorLine}\n${toolLine}`);
-  screen.render();
+export function resetAnimation(): void {
+  resetAnimationInternal();
 }
 
 /**
- * Creates an ASCII progress bar
+ * Creates an ASCII progress bar with color based on percentage
  * @param percent - Current percentage (0-100)
  * @param width - Total width of the progress bar
- * @returns Progress bar string like "████████░░"
+ * @returns Progress bar string with color tags
  */
 export function renderProgressBar(percent: number, width: number): string {
   // Clamp percent between 0 and 100
@@ -208,73 +83,361 @@ export function renderProgressBar(percent: number, width: number): string {
   const filledWidth = Math.round((clampedPercent / 100) * width);
   const emptyWidth = width - filledWidth;
 
-  // Build progress bar
-  return PROGRESS_CHARS.filled.repeat(filledWidth) + PROGRESS_CHARS.empty.repeat(emptyWidth);
+  // Determine color based on percentage
+  let color: string;
+  if (clampedPercent < 50) {
+    color = 'green';
+  } else if (clampedPercent < 80) {
+    color = 'yellow';
+  } else {
+    color = 'red';
+  }
+
+  // Build progress bar with color
+  const filled = PROGRESS_CHARS.filled.repeat(filledWidth);
+  const empty = PROGRESS_CHARS.empty.repeat(emptyWidth);
+
+  return `{${color}-fg}${filled}{/${color}-fg}${empty}`;
 }
 
 /**
- * Formats a speaker label with appropriate styling
+ * Pad a line to a specific width, accounting for color tags
+ * @param line - The line (may contain color tags)
+ * @param width - Target width
+ * @returns Padded line
  */
-function formatSpeakerLabel(speaker: string): string {
-  switch (speaker) {
-    case 'human':
-      return '{bold}You:{/bold}';
-    case 'arbiter':
-      return '{bold}{yellow-fg}Arbiter:{/yellow-fg}{/bold}';
-    default:
-      // Orchestrator labels come through as-is (e.g., "Orchestrator I")
-      if (speaker.startsWith('Orchestrator')) {
-        return `{bold}{cyan-fg}${speaker}:{/cyan-fg}{/bold}`;
-      }
-      return `{bold}${speaker}:{/bold}`;
+function padLineToWidth(line: string, width: number): string {
+  const visibleLength = stripColorTags(line).length;
+  if (visibleLength >= width) {
+    return line;
   }
+  return line + ' '.repeat(width - visibleLength);
 }
 
 /**
- * Wraps text to fit within a specified width
+ * Truncate a line to fit within a width, accounting for color tags
+ * This is a simplified truncation that preserves color tags
+ * @param line - The line (may contain color tags)
+ * @param maxWidth - Maximum visible width
+ * @returns Truncated line
  */
-function wrapText(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) {
-    return text;
+function truncateLineToWidth(line: string, maxWidth: number): string {
+  const visibleLength = stripColorTags(line).length;
+  if (visibleLength <= maxWidth) {
+    return line;
   }
+  // Simple truncation - just return what fits
+  // Note: This may break color tags, but it prevents overflow
+  let visible = 0;
+  let result = '';
+  let inTag = false;
 
-  const words = text.split(' ');
-  const lines: string[] = [];
-  let currentLine = '';
-
-  for (const word of words) {
-    // Handle words that are longer than maxWidth
-    if (word.length > maxWidth) {
-      // If there's content in the current line, push it first
-      if (currentLine) {
-        lines.push(currentLine.trim());
-        currentLine = '';
-      }
-      // Break the long word
-      let remaining = word;
-      while (remaining.length > maxWidth) {
-        lines.push(remaining.substring(0, maxWidth));
-        remaining = remaining.substring(maxWidth);
-      }
-      currentLine = remaining + ' ';
-      continue;
-    }
-
-    // Check if adding this word would exceed the limit
-    if (currentLine.length + word.length + 1 > maxWidth) {
-      lines.push(currentLine.trim());
-      currentLine = word + ' ';
+  for (const char of line) {
+    if (char === '{') {
+      inTag = true;
+      result += char;
+    } else if (char === '}') {
+      inTag = false;
+      result += char;
+    } else if (inTag) {
+      result += char;
     } else {
-      currentLine += word + ' ';
+      if (visible < maxWidth) {
+        result += char;
+        visible++;
+      }
     }
   }
 
-  // Add remaining content
-  if (currentLine.trim()) {
-    lines.push(currentLine.trim());
+  return result;
+}
+
+/**
+ * Render a sprite centered vertically in a zone
+ * @param sprite - The sprite content
+ * @param zoneWidth - Width of the zone
+ * @param zoneHeight - Height of the zone
+ * @param horizontalOffset - Optional horizontal offset within zone (default 0)
+ * @returns Array of lines for this zone
+ */
+function renderSpriteInZone(
+  sprite: string,
+  zoneWidth: number,
+  zoneHeight: number,
+  horizontalOffset: number = 0
+): string[] {
+  const lines: string[] = [];
+  const spriteLines = sprite.split('\n');
+  const spriteHeight = spriteLines.length;
+
+  // Center vertically
+  const startY = Math.floor((zoneHeight - spriteHeight) / 2);
+
+  for (let y = 0; y < zoneHeight; y++) {
+    const spriteLineIndex = y - startY;
+    if (spriteLineIndex >= 0 && spriteLineIndex < spriteLines.length) {
+      // Add horizontal offset and the sprite line
+      const spriteLine = spriteLines[spriteLineIndex];
+      const paddedLine = ' '.repeat(horizontalOffset) + spriteLine;
+      lines.push(truncateLineToWidth(paddedLine, zoneWidth));
+    } else {
+      lines.push('');
+    }
   }
 
-  return lines.join('\n');
+  return lines;
+}
+
+/**
+ * Merge two zone line arrays, overlaying non-empty content
+ * @param base - Base lines array
+ * @param overlay - Lines to overlay on top
+ * @param zoneWidth - Width of the zone
+ * @returns Merged lines
+ */
+function mergeZoneLines(base: string[], overlay: string[], zoneWidth: number): string[] {
+  const result: string[] = [];
+  const maxLen = Math.max(base.length, overlay.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const baseLine = base[i] || '';
+    const overlayLine = overlay[i] || '';
+
+    // If overlay has content, use it; otherwise use base
+    if (stripColorTags(overlayLine).trim()) {
+      result.push(overlayLine);
+    } else {
+      result.push(baseLine);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Render the left zone: Human sprite + speech bubble (when human is speaking)
+ */
+function renderLeftZone(
+  state: AppState,
+  zoneWidth: number,
+  zoneHeight: number
+): string[] {
+  const lines: string[] = new Array(zoneHeight).fill('');
+
+  const lastMessage = state.conversationLog[state.conversationLog.length - 1];
+
+  // Show human sprite when human spoke last
+  if (lastMessage && lastMessage.speaker === 'human') {
+    // Render human sprite on the left side of zone
+    const humanLines = renderSpriteInZone(HUMAN_SPRITE, zoneWidth, zoneHeight, 2);
+
+    // Create speech bubble
+    const maxBubbleWidth = Math.min(zoneWidth - 10, 30);
+    let bubble = createSpeechBubble(lastMessage.text, maxBubbleWidth, 'human');
+    bubble = addTailRight(bubble);
+
+    // Render bubble to the right of human
+    const bubbleLines = bubble.split('\n');
+    const bubbleStartY = Math.floor((zoneHeight - bubbleLines.length) / 2);
+    const humanWidth = getSpriteWidth(HUMAN_SPRITE);
+    const bubbleOffset = humanWidth + 4;
+
+    // Merge human and bubble
+    for (let y = 0; y < zoneHeight; y++) {
+      const humanPart = humanLines[y] || '';
+      const bubbleIndex = y - bubbleStartY;
+
+      if (bubbleIndex >= 0 && bubbleIndex < bubbleLines.length) {
+        // Combine human sprite and bubble on same line
+        const humanVisible = stripColorTags(humanPart).length;
+        const padding = Math.max(0, bubbleOffset - humanVisible);
+        lines[y] = humanPart + ' '.repeat(padding) + bubbleLines[bubbleIndex];
+      } else {
+        lines[y] = humanPart;
+      }
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Render the center zone: Arbiter sprite + campfire below
+ */
+function renderCenterZone(
+  state: AppState,
+  zoneWidth: number,
+  zoneHeight: number
+): string[] {
+  const lines: string[] = new Array(zoneHeight).fill('');
+
+  const campfireFrame = getCampfireFrame();
+  const campfireLines = campfireFrame.split('\n');
+  const arbiterLines = ARBITER_SPRITE.split('\n');
+
+  const arbiterHeight = arbiterLines.length;
+  const campfireHeight = campfireLines.length;
+  const totalHeight = arbiterHeight + campfireHeight + 1; // +1 for spacing
+
+  // Center the combined arbiter+campfire vertically
+  const startY = Math.floor((zoneHeight - totalHeight) / 2);
+
+  // Center horizontally
+  const arbiterWidth = getSpriteWidth(ARBITER_SPRITE);
+  const campfireWidth = getSpriteWidth(campfireFrame);
+  const arbiterOffset = Math.floor((zoneWidth - arbiterWidth) / 2);
+  const campfireOffset = Math.floor((zoneWidth - campfireWidth) / 2);
+
+  // Render arbiter
+  for (let i = 0; i < arbiterHeight; i++) {
+    const y = startY + i;
+    if (y >= 0 && y < zoneHeight) {
+      lines[y] = ' '.repeat(arbiterOffset) + arbiterLines[i];
+    }
+  }
+
+  // Render campfire below arbiter
+  const campfireStartY = startY + arbiterHeight + 1;
+  for (let i = 0; i < campfireHeight; i++) {
+    const y = campfireStartY + i;
+    if (y >= 0 && y < zoneHeight) {
+      lines[y] = ' '.repeat(campfireOffset) + campfireLines[i];
+    }
+  }
+
+  // If arbiter is speaking, add speech bubble
+  const lastMessage = state.conversationLog[state.conversationLog.length - 1];
+  if (lastMessage && lastMessage.speaker === 'arbiter') {
+    const maxBubbleWidth = Math.min(zoneWidth - 4, 35);
+    let bubble = createSpeechBubble(lastMessage.text, maxBubbleWidth, 'arbiter');
+    // Tail points toward who arbiter is talking to
+    if (state.mode === 'human_to_arbiter') {
+      bubble = addTailLeft(bubble); // Talking to human (left)
+    } else {
+      bubble = addTailRight(bubble); // Talking to wizard (right)
+    }
+
+    const bubbleLines = bubble.split('\n');
+    const bubbleHeight = bubbleLines.length;
+    const bubbleStartY = Math.max(0, startY - bubbleHeight - 1);
+    const bubbleOffset = Math.floor((zoneWidth - getBubbleWidth(bubble)) / 2);
+
+    for (let i = 0; i < bubbleHeight; i++) {
+      const y = bubbleStartY + i;
+      if (y >= 0 && y < zoneHeight) {
+        lines[y] = ' '.repeat(Math.max(0, bubbleOffset)) + bubbleLines[i];
+      }
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Render the right zone: Wizard sprite (when orchestrator is active)
+ */
+function renderRightZone(
+  state: AppState,
+  zoneWidth: number,
+  zoneHeight: number
+): string[] {
+  const lines: string[] = new Array(zoneHeight).fill('');
+
+  if (!state.currentOrchestrator) {
+    return lines;
+  }
+
+  // Create wizard sprite
+  const romanNumeral = toRoman(state.currentOrchestrator.number);
+  const gemFrame = getWizardGemFrame();
+  const wizardSprite = createWizardSprite(romanNumeral, true, gemFrame);
+  const wizardLines = wizardSprite.split('\n');
+  const wizardHeight = wizardLines.length;
+  const wizardWidth = getSpriteWidth(wizardSprite);
+
+  // Center wizard vertically
+  const wizardStartY = Math.floor((zoneHeight - wizardHeight) / 2);
+
+  // Position wizard on the left side of the right zone (closer to center/campfire)
+  const wizardOffset = 2;
+
+  // Render wizard
+  for (let i = 0; i < wizardHeight; i++) {
+    const y = wizardStartY + i;
+    if (y >= 0 && y < zoneHeight) {
+      lines[y] = ' '.repeat(wizardOffset) + wizardLines[i];
+    }
+  }
+
+  // If orchestrator is speaking, add speech bubble
+  const lastMessage = state.conversationLog[state.conversationLog.length - 1];
+  if (lastMessage && lastMessage.speaker === 'orchestrator') {
+    const maxBubbleWidth = Math.min(zoneWidth - wizardWidth - 8, 30);
+    let bubble = createSpeechBubble(lastMessage.text, maxBubbleWidth, 'orchestrator');
+    bubble = addTailLeft(bubble); // Points left toward wizard
+
+    const bubbleLines = bubble.split('\n');
+    const bubbleHeight = bubbleLines.length;
+    const bubbleStartY = Math.floor((zoneHeight - bubbleHeight) / 2);
+    const bubbleOffset = wizardOffset + wizardWidth + 2;
+
+    // Merge wizard and bubble
+    for (let i = 0; i < bubbleHeight; i++) {
+      const y = bubbleStartY + i;
+      if (y >= 0 && y < zoneHeight && lines[y]) {
+        const existingLine = lines[y];
+        const existingVisible = stripColorTags(existingLine).length;
+        const padding = Math.max(0, bubbleOffset - existingVisible);
+        lines[y] = existingLine + ' '.repeat(padding) + bubbleLines[i];
+      }
+    }
+  }
+
+  return lines;
+}
+
+/**
+ * Renders the RPG-style scene with Arbiter, campfire, wizards, and speech bubbles
+ * Uses a zone-based approach: LEFT (human+bubble) | CENTER (arbiter+fire) | RIGHT (wizard)
+ * This is the main scene render function that replaces the old conversation rendering
+ */
+export function renderScene(elements: LayoutElements, state: AppState): void {
+  const { conversationBox, screen } = elements;
+
+  // Get dimensions
+  const stageWidth = Math.max((screen.width as number) - 4, 76);
+  const stageHeight = Math.max((conversationBox.height as number) - 2, 20);
+
+  // Define zone widths - proportional split
+  const leftZoneWidth = Math.floor(stageWidth * 0.30);   // 30% for human/bubble
+  const centerZoneWidth = Math.floor(stageWidth * 0.40); // 40% for arbiter/fire
+  const rightZoneWidth = stageWidth - leftZoneWidth - centerZoneWidth; // rest for wizard
+
+  // Render each zone as array of lines
+  const leftLines = renderLeftZone(state, leftZoneWidth, stageHeight);
+  const centerLines = renderCenterZone(state, centerZoneWidth, stageHeight);
+  const rightLines = renderRightZone(state, rightZoneWidth, stageHeight);
+
+  // Combine zones line by line
+  const outputLines: string[] = [];
+  for (let y = 0; y < stageHeight; y++) {
+    const leftPart = padLineToWidth(leftLines[y] || '', leftZoneWidth);
+    const centerPart = padLineToWidth(centerLines[y] || '', centerZoneWidth);
+    const rightPart = padLineToWidth(rightLines[y] || '', rightZoneWidth);
+
+    outputLines.push(leftPart + centerPart + rightPart);
+  }
+
+  conversationBox.setContent(outputLines.join('\n'));
+  screen.render();
+}
+
+/**
+ * Renders the conversation log - redirects to renderScene for backward compatibility
+ * This is the legacy function that other parts of the codebase call
+ */
+export function renderConversation(elements: LayoutElements, state: AppState): void {
+  renderScene(elements, state);
 }
 
 /**
@@ -287,28 +450,121 @@ function createDashLine(length: number): string {
 }
 
 /**
- * Renders the input area with prompt
+ * Renders the status bar with context percentages and current tool
+ * RPG-style status showing Arbiter and Wizard stats
+ *
+ * Line 1: Arbiter context % and progress bar
+ * Line 2: Orchestrator context % (if active) or waiting message
+ * Line 3: Tool indicator + "[Tab] Logbook" hint
+ *
+ * @param waitingState - Optional waiting state to show animated dots
  */
-export function renderInputArea(elements: LayoutElements): void {
-  const { screen } = elements;
+export function renderStatus(
+  elements: LayoutElements,
+  state: AppState,
+  waitingState: WaitingState = 'none'
+): void {
+  const { statusBox, screen } = elements;
   const effectiveWidth = Math.max((screen.width as number) - 2, 78);
 
-  // Input separator and prompt are handled by the layout
-  // This function can be used for additional input area styling if needed
+  // Status separator at top
+  const separator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.rightT;
 
-  // Create input separator
-  const inputSeparator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.rightT;
+  // Progress bar width (10 characters for the bar)
+  const barWidth = 10;
 
-  // The inputBox already has its own styling from layout
-  // We can prepend a separator to the status box if needed
+  // Build Arbiter status line
+  const arbiterLabel = '{yellow-fg}Arbiter{/yellow-fg}';
+  const arbiterLabelLen = 7; // "Arbiter" without tags
+  const arbiterBar = renderProgressBar(state.arbiterContextPercent, barWidth);
+  const arbiterPercent = `${Math.round(state.arbiterContextPercent)}%`.padStart(4);
+  const arbiterDashes = createDashLine(
+    effectiveWidth - arbiterLabelLen - barWidth - arbiterPercent.length - 8
+  );
+  const arbiterLine = `${BOX_CHARS.vertical}  ${arbiterLabel} ${arbiterDashes} ${arbiterBar} ${arbiterPercent}  ${BOX_CHARS.vertical}`;
+
+  let orchestratorLine: string;
+  let toolLine: string;
+
+  // Set animation active state based on waiting state
+  setAnimationActive(waitingState !== 'none' || (state.currentOrchestrator?.currentTool !== null));
+
+  if (state.currentOrchestrator) {
+    // Orchestrator status line
+    const orchNumeral = toRoman(state.currentOrchestrator.number);
+    const orchLabel = `{cyan-fg}Wizard ${orchNumeral}{/cyan-fg}`;
+    const orchLabelLen = 6 + orchNumeral.length + 1; // "Wizard " + numeral
+    const orchBar = renderProgressBar(state.currentOrchestrator.contextPercent, barWidth);
+    const orchPercent = `${Math.round(state.currentOrchestrator.contextPercent)}%`.padStart(4);
+    const orchDashes = createDashLine(
+      effectiveWidth - orchLabelLen - barWidth - orchPercent.length - 8
+    );
+    orchestratorLine = `${BOX_CHARS.vertical}  ${orchLabel} ${orchDashes} ${orchBar} ${orchPercent}  ${BOX_CHARS.vertical}`;
+
+    // Tool indicator line with logbook hint
+    const logbookHint = '{gray-fg}[Ctrl+O] Logbook{/gray-fg}';
+    const logbookHintLen = 16; // "[Ctrl+O] Logbook" without tags
+
+    if (state.currentOrchestrator.currentTool) {
+      const toolText = `${TOOL_INDICATOR} ${state.currentOrchestrator.currentTool} (${state.currentOrchestrator.toolCallCount})`;
+      const toolPadding = ' '.repeat(
+        Math.max(0, effectiveWidth - toolText.length - logbookHintLen - 4)
+      );
+      toolLine = `${BOX_CHARS.vertical}  ${toolText}${toolPadding}${logbookHint}${BOX_CHARS.vertical}`;
+    } else if (waitingState === 'orchestrator') {
+      // Show animated dots when waiting for orchestrator response
+      const dots = getAnimatedDots();
+      const waitingText = `The wizard works${dots}`;
+      const waitingPadding = ' '.repeat(
+        Math.max(0, effectiveWidth - waitingText.length - logbookHintLen - 4)
+      );
+      toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${logbookHint}${BOX_CHARS.vertical}`;
+    } else {
+      const workingText = 'The wizard contemplates...';
+      const workingPadding = ' '.repeat(
+        Math.max(0, effectiveWidth - workingText.length - logbookHintLen - 4)
+      );
+      toolLine = `${BOX_CHARS.vertical}  ${workingText}${workingPadding}${logbookHint}${BOX_CHARS.vertical}`;
+    }
+  } else if (waitingState === 'arbiter') {
+    // Waiting for Arbiter response - show animated dots
+    const dots = getAnimatedDots();
+    const waitingText = `Awaiting the Arbiter${dots}`;
+    const waitingPadding = ' '.repeat(effectiveWidth - waitingText.length - 2);
+    orchestratorLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${BOX_CHARS.vertical}`;
+
+    const logbookHint = '{gray-fg}[Ctrl+O] Logbook{/gray-fg}';
+    const hintPadding = ' '.repeat(Math.max(0, effectiveWidth - 16 - 2));
+    toolLine = `${BOX_CHARS.vertical}  ${hintPadding}${logbookHint}${BOX_CHARS.vertical}`;
+  } else {
+    // No orchestrator - show awaiting message
+    const awaitingText = 'Awaiting your command, mortal.';
+    const awaitingPadding = ' '.repeat(effectiveWidth - awaitingText.length - 2);
+    orchestratorLine = `${BOX_CHARS.vertical}  ${awaitingText}${awaitingPadding}${BOX_CHARS.vertical}`;
+
+    const logbookHint = '{gray-fg}[Ctrl+O] Logbook{/gray-fg}';
+    const hintPadding = ' '.repeat(Math.max(0, effectiveWidth - 16 - 2));
+    toolLine = `${BOX_CHARS.vertical}  ${hintPadding}${logbookHint}${BOX_CHARS.vertical}`;
+  }
+
+  statusBox.setContent(`${separator}\n${arbiterLine}\n${orchestratorLine}\n${toolLine}`);
   screen.render();
 }
 
 /**
- * Updates the entire display
+ * Renders the input area with prompt
+ */
+export function renderInputArea(elements: LayoutElements): void {
+  const { screen } = elements;
+  // The inputBox already has its own styling from layout
+  screen.render();
+}
+
+/**
+ * Updates the entire display - renders both scene and status
  */
 export function renderAll(elements: LayoutElements, state: AppState): void {
-  renderConversation(elements, state);
+  renderScene(elements, state);
   renderStatus(elements, state);
   elements.screen.render();
 }

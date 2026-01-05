@@ -518,15 +518,6 @@ export class Router {
             (usage.cache_creation_input_tokens || 0);
           const pct = (total / MAX_CONTEXT_TOKENS) * 100;
 
-          console.log('[Context Debug] Arbiter:', {
-            input: usage.input_tokens,
-            cache_read: usage.cache_read_input_tokens,
-            cache_creation: usage.cache_creation_input_tokens,
-            total,
-            pct,
-            previous: this.state.arbiterContextPercent
-          });
-
           // Context should never decrease - use the maximum of current and new
           const finalPct = Math.max(pct, this.state.arbiterContextPercent);
           updateArbiterContext(this.state, finalPct);
@@ -597,15 +588,6 @@ export class Router {
             (usage.cache_read_input_tokens || 0) +
             (usage.cache_creation_input_tokens || 0);
           const pct = (total / MAX_CONTEXT_TOKENS) * 100;
-
-          console.log('[Context Debug] Orchestrator:', {
-            input: usage.input_tokens,
-            cache_read: usage.cache_read_input_tokens,
-            cache_creation: usage.cache_creation_input_tokens,
-            total,
-            pct,
-            previous: this.state.currentOrchestrator?.contextPercent ?? 0
-          });
 
           if (this.state.currentOrchestrator) {
             // Context should never decrease - use the maximum

@@ -1,23 +1,29 @@
 // TUI layout configuration using blessed
-// Defines the screen layout, panels, and UI structure
+// RPG-style terminal interface with wizard council theme
 
 import blessed from 'blessed';
 
 /**
  * Layout elements interface - exposes all UI components
+ * Extended to include logbook overlay for raw log view
  */
 export interface LayoutElements {
   screen: blessed.Widgets.Screen;
   titleBox: blessed.Widgets.BoxElement;
-  conversationBox: blessed.Widgets.BoxElement;
+  conversationBox: blessed.Widgets.BoxElement;  // This is the stage box (main rendering area)
   statusBox: blessed.Widgets.BoxElement;
-  inputBox: blessed.Widgets.TextboxElement;
+  inputBox: blessed.Widgets.TextareaElement;
+  // Logbook overlay (toggled with Ctrl+O)
+  logbookOverlay?: blessed.Widgets.BoxElement;
+  logbookContent?: blessed.Widgets.Log;
 }
 
 /**
  * Box drawing characters for roguelike aesthetic
+ * Double-line characters for main borders
  */
 const BOX_CHARS = {
+  // Double-line characters
   topLeft: '\u2554',     // ╔
   topRight: '\u2557',    // ╗
   bottomLeft: '\u255A',  // ╚
@@ -29,14 +35,25 @@ const BOX_CHARS = {
 };
 
 /**
- * Creates the blessed screen layout matching the architecture doc design
+ * Color constants for the RPG theme
+ * Brown borders where possible, gold title
+ */
+const COLORS = {
+  brown: '#8B4513',      // Wood-like brown for borders
+  gold: 'yellow',        // Gold/yellow for title
+  white: 'white',        // Default text
+  gray: 'gray',          // Hints and secondary text
+};
+
+/**
+ * Creates the blessed screen layout with RPG-style wizard council theme
  *
  * Layout:
- * - Full terminal takeover
- * - Title area at top with "THE ARBITER" and subtitle
- * - Main conversation area (scrollable)
- * - Status bar showing Arbiter context %, Orchestrator context %, current tool
- * - Input box at bottom with ">" prompt
+ * - Title Box (4 lines): "THE ARBITER" + subtitle with double-line borders
+ * - Stage Box (main area): Where sprites, campfire, speech bubbles render
+ * - Status Bar (3-4 lines): Context percentages, tool indicator, logbook hint
+ * - Input Box (3 lines): Text input with "> " prompt
+ * - Logbook Overlay (hidden): Full-screen raw log view, toggled with Tab
  */
 export function createLayout(): LayoutElements {
   // Create the main screen
@@ -48,7 +65,7 @@ export function createLayout(): LayoutElements {
     autoPadding: false,
   });
 
-  // Title box at the top
+  // Title box at the top (4 lines)
   const titleBox = blessed.box({
     parent: screen,
     top: 0,
@@ -58,21 +75,22 @@ export function createLayout(): LayoutElements {
     content: '',
     tags: true,
     style: {
-      fg: 'white',
+      fg: COLORS.white,
       bg: 'black',
     },
   });
 
-  // Set title content with box drawing characters
+  // Set initial title content
   updateTitleContent(titleBox, screen.width as number);
 
-  // Main conversation area (scrollable)
+  // Stage box - main rendering area for sprites, speech bubbles, etc.
+  // Named conversationBox for backward compatibility
   const conversationBox = blessed.box({
     parent: screen,
     top: 4,
     left: 0,
     width: '100%',
-    height: '100%-10', // Leave room for status (3 lines) and input (3 lines)
+    height: '100%-11', // Leave room for status (4 lines) and input (3 lines)
     content: '',
     tags: true,
     scrollable: true,
@@ -80,17 +98,17 @@ export function createLayout(): LayoutElements {
     scrollbar: {
       ch: '\u2588', // █
       style: {
-        fg: 'white',
+        fg: COLORS.white,
       },
     },
     mouse: true,
     keys: true,
     vi: true,
     style: {
-      fg: 'white',
+      fg: COLORS.white,
       bg: 'black',
       border: {
-        fg: 'white',
+        fg: COLORS.white,
       },
     },
     border: {
@@ -108,7 +126,10 @@ export function createLayout(): LayoutElements {
     right: BOX_CHARS.vertical,
   } as blessed.Widgets.Border;
 
-  // Status bar area (3 lines)
+  // Add scene title inside the stage box
+  updateStageTitle(conversationBox, screen.width as number);
+
+  // Status bar area (4 lines above input)
   const statusBox = blessed.box({
     parent: screen,
     bottom: 3,
@@ -118,13 +139,13 @@ export function createLayout(): LayoutElements {
     content: '',
     tags: true,
     style: {
-      fg: 'white',
+      fg: COLORS.white,
       bg: 'black',
     },
   });
 
-  // Input box at the bottom
-  const inputBox = blessed.textbox({
+  // Input box at the bottom (3 lines)
+  const inputBox = blessed.textarea({
     parent: screen,
     bottom: 0,
     left: 2,  // Leave room for "> " prompt
@@ -133,20 +154,16 @@ export function createLayout(): LayoutElements {
     inputOnFocus: true,
     mouse: true,
     keys: true,
+    vi: false,  // Disable vi mode for normal editing
     style: {
-      fg: 'white',
+      fg: COLORS.white,
       bg: 'black',
-      border: {
-        fg: 'white',
-      },
-    },
-    border: {
-      type: 'line',
     },
   });
 
+
   // Create a fixed prompt label "> " that sits to the left of the input
-  const promptLabel = blessed.text({
+  blessed.text({
     parent: screen,
     bottom: 1,
     left: 0,
@@ -154,14 +171,18 @@ export function createLayout(): LayoutElements {
     height: 1,
     content: '> ',
     style: {
-      fg: 'white',
+      fg: COLORS.white,
       bg: 'black',
     },
   });
 
-  // Handle screen resize to update title width
+  // Create logbook overlay (hidden by default)
+  const { logbookOverlay, logbookContent } = createLogbookOverlay(screen);
+
+  // Handle screen resize to update title width and stage title
   screen.on('resize', () => {
     updateTitleContent(titleBox, screen.width as number);
+    updateStageTitle(conversationBox, screen.width as number);
     screen.render();
   });
 
@@ -177,17 +198,169 @@ export function createLayout(): LayoutElements {
     process.exit(0);
   });
 
+  // Set up Ctrl+O key binding to toggle logbook overlay
+  // Using Ctrl+O instead of Tab to avoid focus loop issues with blessed textboxes
+  const toggleLogbook = () => {
+    if (logbookOverlay.hidden) {
+      logbookOverlay.show();
+      logbookOverlay.focus();
+    } else {
+      logbookOverlay.hide();
+      inputBox.focus();
+    }
+    screen.render();
+  };
+
+  // Bind Ctrl+O on screen level for when other elements are focused
+  screen.key(['C-o'], toggleLogbook);
+
+  // Bind Ctrl+O on inputBox as well
+  inputBox.key(['C-o'], toggleLogbook);
+
+  // When logbook is open, Ctrl+O and Escape close it
+  logbookOverlay.key(['C-o', 'escape'], () => {
+    logbookOverlay.hide();
+    inputBox.focus();
+    screen.render();
+  });
+
+  // Quit keys on logbook overlay
+  logbookOverlay.key(['C-c', 'C-z'], () => {
+    screen.destroy();
+    process.exit(0);
+  });
+
   return {
     screen,
     titleBox,
     conversationBox,
     statusBox,
     inputBox,
+    logbookOverlay,
+    logbookContent,
   };
 }
 
 /**
+ * Creates the logbook overlay - a full-screen scrollable log view
+ * Hidden by default, toggled with Tab key
+ */
+function createLogbookOverlay(screen: blessed.Widgets.Screen): {
+  logbookOverlay: blessed.Widgets.BoxElement;
+  logbookContent: blessed.Widgets.Log;
+} {
+  // Container box for the logbook overlay
+  const logbookOverlay = blessed.box({
+    parent: screen,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    hidden: true,
+    tags: true,
+    style: {
+      fg: COLORS.white,
+      bg: 'black',
+    },
+  });
+
+  // Title bar for logbook
+  const logbookTitle = blessed.box({
+    parent: logbookOverlay,
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: 3,
+    content: '',
+    tags: true,
+    style: {
+      fg: COLORS.white,
+      bg: 'black',
+    },
+  });
+
+  // Set logbook title content
+  const updateLogbookTitle = () => {
+    const width = Math.max((screen.width as number) - 2, 78);
+    const title = 'LOGBOOK';
+    const hint = '[Ctrl+O] Close';
+
+    const topBorder = BOX_CHARS.topLeft + BOX_CHARS.horizontal.repeat(width) + BOX_CHARS.topRight;
+
+    const titlePadding = Math.max(0, Math.floor((width - title.length) / 2));
+    const hintStart = width - hint.length - 2;
+
+    let titleLine = BOX_CHARS.vertical + ' '.repeat(titlePadding) + `{bold}${title}{/bold}`;
+    const currentLen = titlePadding + title.length;
+    const spacesToHint = hintStart - currentLen;
+    titleLine += ' '.repeat(Math.max(0, spacesToHint)) + `{gray-fg}${hint}{/gray-fg}`;
+    const remainingSpace = width - (titlePadding + title.length + Math.max(0, spacesToHint) + hint.length);
+    titleLine += ' '.repeat(Math.max(0, remainingSpace)) + BOX_CHARS.vertical;
+
+    const separator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(width) + BOX_CHARS.rightT;
+
+    logbookTitle.setContent(topBorder + '\n' + titleLine + '\n' + separator);
+  };
+  updateLogbookTitle();
+
+  // Scrollable log content
+  const logbookContent = blessed.log({
+    parent: logbookOverlay,
+    top: 3,
+    left: 1,
+    width: '100%-2',
+    height: '100%-4',
+    tags: true,
+    scrollable: true,
+    alwaysScroll: true,
+    scrollbar: {
+      ch: '\u2588', // █
+      style: {
+        fg: COLORS.white,
+      },
+    },
+    mouse: true,
+    keys: true,
+    vi: true,
+    style: {
+      fg: COLORS.white,
+      bg: 'black',
+    },
+  });
+
+  // Bottom border
+  const logbookBottom = blessed.box({
+    parent: logbookOverlay,
+    bottom: 0,
+    left: 0,
+    width: '100%',
+    height: 1,
+    content: '',
+    tags: true,
+    style: {
+      fg: COLORS.white,
+      bg: 'black',
+    },
+  });
+
+  const updateLogbookBottom = () => {
+    const width = Math.max((screen.width as number) - 2, 78);
+    logbookBottom.setContent(BOX_CHARS.bottomLeft + BOX_CHARS.horizontal.repeat(width) + BOX_CHARS.bottomRight);
+  };
+  updateLogbookBottom();
+
+  // Handle resize for logbook
+  screen.on('resize', () => {
+    updateLogbookTitle();
+    updateLogbookBottom();
+  });
+
+  return { logbookOverlay, logbookContent };
+}
+
+/**
  * Updates the title box content with proper width-based formatting
+ * Creates the RPG-style header with "THE ARBITER" and subtitle
  */
 function updateTitleContent(titleBox: blessed.Widgets.BoxElement, width: number): void {
   const title = 'THE ARBITER';
@@ -203,12 +376,14 @@ function updateTitleContent(titleBox: blessed.Widgets.BoxElement, width: number)
   const titlePadding = Math.max(0, Math.floor((effectiveWidth - title.length) / 2));
   const subtitlePadding = Math.max(0, Math.floor((effectiveWidth - subtitle.length) / 2));
 
+  // Title line with gold/yellow color and bold
   const titleLine = BOX_CHARS.vertical +
     ' '.repeat(titlePadding) +
-    `{bold}${title}{/bold}` +
+    `{bold}{yellow-fg}${title}{/yellow-fg}{/bold}` +
     ' '.repeat(effectiveWidth - titlePadding - title.length) +
     BOX_CHARS.vertical;
 
+  // Subtitle line
   const subtitleLine = BOX_CHARS.vertical +
     ' '.repeat(subtitlePadding) +
     subtitle +
@@ -224,6 +399,22 @@ function updateTitleContent(titleBox: blessed.Widgets.BoxElement, width: number)
     subtitleLine + '\n' +
     separator
   );
+}
+
+/**
+ * Updates the stage box with a scene title at the top
+ * "THE WIZARD'S CIRCLE" centered within the stage area
+ */
+function updateStageTitle(stageBox: blessed.Widgets.BoxElement, width: number): void {
+  const sceneTitle = 'THE WIZARD\'S CIRCLE';
+  const effectiveWidth = Math.max(width - 6, 74);
+  const padding = Math.max(0, Math.floor((effectiveWidth - sceneTitle.length) / 2));
+
+  // Set the label for the stage box
+  stageBox.setLabel({
+    text: ` {bold}${sceneTitle}{/bold} `,
+    side: 'center',
+  });
 }
 
 /**
@@ -244,4 +435,15 @@ export function createInputPrompt(width: number): string {
 export function createSeparator(width: number): string {
   const effectiveWidth = Math.max(width - 2, 78);
   return BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.rightT;
+}
+
+/**
+ * Adds a log entry to the logbook
+ * Call this to append timestamped entries to the raw log view
+ */
+export function appendToLogbook(elements: LayoutElements, entry: string): void {
+  if (elements.logbookContent) {
+    const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false });
+    elements.logbookContent.log(`[${timestamp}] ${entry}`);
+  }
 }

@@ -1,10 +1,12 @@
 // TUI module entry point
-// Exports the terminal user interface components and initialization
+// RPG-style terminal interface with wizard council theme
 
-import { AppState } from '../state.js';
+import { AppState, toRoman } from '../state.js';
 import { RouterCallbacks } from '../router.js';
-import { createLayout, LayoutElements } from './layout.js';
-import { renderConversation, renderStatus, renderAll, advanceAnimation, resetAnimation, WaitingState } from './render.js';
+import { createLayout, LayoutElements, appendToLogbook } from './layout.js';
+import { renderScene, renderStatus, renderAll, advanceAnimation, resetAnimation, WaitingState } from './render.js';
+import { Logbook } from './logbook.js';
+import { AnimationTimer, setAnimationActive } from './animations.js';
 
 /**
  * TUI interface - main entry point for the terminal UI
@@ -25,18 +27,6 @@ export interface TUI {
 }
 
 /**
- * Box drawing characters for input prompt
- */
-const BOX_CHARS = {
-  leftT: '\u2560',       // ╠
-  rightT: '\u2563',      // ╣
-  horizontal: '\u2550',  // ═
-  vertical: '\u2551',    // ║
-  bottomLeft: '\u255A',  // ╚
-  bottomRight: '\u255D', // ╝
-};
-
-/**
  * Creates a TUI instance for the Arbiter system
  *
  * @param state - The application state to render
@@ -47,27 +37,20 @@ export function createTUI(state: AppState): TUI {
   let inputCallback: ((text: string) => void) | null = null;
   let isRunning = false;
   let waitingState: WaitingState = 'none';
-  let animationInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Logbook instance for logging
+  let logbook: Logbook | null = null;
+
+  // Animation timer for campfire/gem animations
+  let animationTimer: AnimationTimer | null = null;
 
   /**
-   * Starts the loading animation interval
+   * Starts the waiting animation
    */
-  function startAnimation(newWaitingState: WaitingState): void {
-    waitingState = newWaitingState;
+  function startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void {
+    waitingState = waitingFor;
+    setAnimationActive(true);
     resetAnimation();
-
-    // Clear any existing interval
-    if (animationInterval) {
-      clearInterval(animationInterval);
-    }
-
-    // Start animation interval (updates every 400ms for smooth animation)
-    animationInterval = setInterval(() => {
-      if (elements && isRunning && waitingState !== 'none') {
-        advanceAnimation();
-        renderStatus(elements, state, waitingState);
-      }
-    }, 400);
 
     // Render immediately with the new waiting state
     if (elements && isRunning) {
@@ -76,16 +59,11 @@ export function createTUI(state: AppState): TUI {
   }
 
   /**
-   * Stops the loading animation interval
+   * Stops the waiting animation
    */
-  function stopAnimation(): void {
+  function stopWaiting(): void {
     waitingState = 'none';
-
-    if (animationInterval) {
-      clearInterval(animationInterval);
-      animationInterval = null;
-    }
-
+    setAnimationActive(false);
     resetAnimation();
 
     // Render status without waiting state
@@ -95,67 +73,74 @@ export function createTUI(state: AppState): TUI {
   }
 
   /**
-   * Updates the input box with proper prompt styling
+   * Updates the logbook overlay content when visible
    */
-  function updateInputBox(): void {
-    if (!elements) return;
+  function updateLogbookOverlay(): void {
+    if (!elements || !logbook || !elements.logbookContent) return;
 
-    const { inputBox, screen } = elements;
-    const effectiveWidth = Math.max((screen.width as number) - 2, 78);
-
-    // Create separator line above input
-    const separator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.rightT;
-
-    // Create input line with prompt
-    const inputLine = BOX_CHARS.vertical + ' > ';
-
-    // Create bottom border
-    const bottomBorder = BOX_CHARS.bottomLeft + BOX_CHARS.horizontal.repeat(effectiveWidth) + BOX_CHARS.bottomRight;
-
-    // Set label to show prompt
-    inputBox.setLabel(' > ');
-
-    screen.render();
+    // Clear and re-populate with current view
+    elements.logbookContent.setContent('');
+    const entries = logbook.getCurrentView();
+    for (const entry of entries) {
+      elements.logbookContent.log(entry);
+    }
   }
 
   /**
-   * Sets up input handling for the textbox
+   * Sets up input handling for the textarea
    */
   function setupInputHandling(): void {
     if (!elements) return;
 
     const { inputBox, screen } = elements;
 
-    // Handle submit event
-    inputBox.on('submit', (value: string) => {
-      if (value && value.trim() && inputCallback) {
-        inputCallback(value.trim());
-      }
-
-      // Clear and refocus
-      inputBox.clearValue();
-      inputBox.focus();
-      screen.render();
-    });
-
-    // Handle cancel (escape in input)
-    inputBox.on('cancel', () => {
-      inputBox.clearValue();
-      inputBox.focus();
-      screen.render();
-    });
-
     // Focus the input box by default
     inputBox.focus();
 
-    // Set up key bindings for input
+    // Handle enter key to submit (textarea doesn't have submit event)
     inputBox.key(['enter'], () => {
-      inputBox.submit();
+      const value = inputBox.getValue();
+      if (value && value.trim() && inputCallback) {
+        inputCallback(value.trim());
+      }
+      inputBox.clearValue();
+      inputBox.focus();
+      screen.render();
     });
 
-    // Allow escape to cancel current input
+    // Allow escape to clear current input
     inputBox.key(['escape'], () => {
-      inputBox.cancel();
+      inputBox.clearValue();
+      inputBox.focus();
+      screen.render();
+    });
+  }
+
+  /**
+   * Sets up logbook toggle handling
+   */
+  function setupLogbookToggle(): void {
+    if (!elements || !elements.logbookOverlay) return;
+
+    const { logbookOverlay, inputBox, screen } = elements;
+
+    const toggleLogbook = () => {
+      if (logbookOverlay.hidden) {
+        // Update logbook content before showing
+        updateLogbookOverlay();
+        logbookOverlay.show();
+        logbookOverlay.focus();
+      } else {
+        logbookOverlay.hide();
+        inputBox.focus();
+      }
+      screen.render();
+    };
+
+    // The Ctrl+O key binding is already set up in layout.ts
+    // We just need to hook into the show event to update content
+    logbookOverlay.on('show', () => {
+      updateLogbookOverlay();
     });
   }
 
@@ -169,11 +154,26 @@ export function createTUI(state: AppState): TUI {
     elements = createLayout();
     isRunning = true;
 
+    // Create logbook instance
+    logbook = new Logbook();
+    logbook.addSystemEvent('TUI started');
+
+    // Create animation timer for campfire/gem animations
+    animationTimer = new AnimationTimer(() => {
+      if (elements && isRunning) {
+        // Re-render status bar for animated dots
+        renderStatus(elements, state, waitingState);
+      }
+    }, 400);
+
+    // Start the animation timer
+    animationTimer.start();
+
     // Set up input handling
     setupInputHandling();
 
-    // Update input box styling
-    updateInputBox();
+    // Set up logbook toggle
+    setupLogbookToggle();
 
     // Initial render
     renderAll(elements, state);
@@ -181,7 +181,6 @@ export function createTUI(state: AppState): TUI {
     // Handle resize
     elements.screen.on('resize', () => {
       if (elements) {
-        updateInputBox();
         renderAll(elements, state);
       }
     });
@@ -193,8 +192,18 @@ export function createTUI(state: AppState): TUI {
   function stop(): void {
     if (!isRunning || !elements) return;
 
-    // Stop any running animation
-    stopAnimation();
+    // Stop animation timer
+    if (animationTimer) {
+      animationTimer.stop();
+      animationTimer = null;
+    }
+
+    // Close logbook (flush to file)
+    if (logbook) {
+      logbook.addSystemEvent('TUI stopped');
+      logbook.close();
+      logbook = null;
+    }
 
     // Destroy the screen
     elements.screen.destroy();
@@ -210,26 +219,46 @@ export function createTUI(state: AppState): TUI {
       onHumanMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
-        // Render updated conversation immediately so human message appears before response
-        renderConversation(elements, state);
+        // Log the message
+        if (logbook) {
+          logbook.addMessage('human', text);
+        }
+
+        // Render updated scene immediately so human message appears before response
+        renderScene(elements, state);
       },
 
       onArbiterMessage: (text: string) => {
         if (!elements || !isRunning) return;
 
-        // Render updated conversation
-        renderConversation(elements, state);
+        // Log the message
+        if (logbook) {
+          logbook.addMessage('arbiter', text);
+        }
+
+        // Render updated scene
+        renderScene(elements, state);
       },
 
       onOrchestratorMessage: (orchestratorNumber: number, text: string) => {
         if (!elements || !isRunning) return;
 
-        // Render updated conversation
-        renderConversation(elements, state);
+        // Log the message with Roman numeral
+        if (logbook) {
+          logbook.addMessage(`Orchestrator ${toRoman(orchestratorNumber)}`, text);
+        }
+
+        // Render updated scene
+        renderScene(elements, state);
       },
 
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
         if (!elements || !isRunning) return;
+
+        // Log the context update
+        if (logbook) {
+          logbook.addContextUpdate(arbiterPercent, orchestratorPercent);
+        }
 
         // Render updated status bar (preserve waiting state for animation)
         renderStatus(elements, state, waitingState);
@@ -238,6 +267,11 @@ export function createTUI(state: AppState): TUI {
       onToolUse: (tool: string, count: number) => {
         if (!elements || !isRunning) return;
 
+        // Log the tool use
+        if (logbook) {
+          logbook.addToolUse(tool, count);
+        }
+
         // Render updated status bar (preserve waiting state for animation)
         renderStatus(elements, state, waitingState);
       },
@@ -245,16 +279,21 @@ export function createTUI(state: AppState): TUI {
       onModeChange: (mode: AppState['mode']) => {
         if (!elements || !isRunning) return;
 
-        // Render updated status bar (mode affects orchestrator display, preserve waiting state)
-        renderStatus(elements, state, waitingState);
+        // Log the mode change
+        if (logbook) {
+          logbook.addModeChange(mode);
+        }
+
+        // Re-render scene to move Arbiter position
+        renderScene(elements, state);
       },
 
       onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
-        startAnimation(waitingFor);
+        startWaiting(waitingFor);
       },
 
       onWaitingStop: () => {
-        stopAnimation();
+        stopWaiting();
       },
     };
   }
@@ -271,8 +310,8 @@ export function createTUI(state: AppState): TUI {
     stop,
     getRouterCallbacks,
     onInput,
-    startWaiting: startAnimation,
-    stopWaiting: stopAnimation,
+    startWaiting,
+    stopWaiting,
   };
 }
 
