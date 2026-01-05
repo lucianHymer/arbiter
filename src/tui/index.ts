@@ -64,6 +64,8 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
 
   // Track when hopping started (for 3-second limit)
   let hopStartTime: number | null = null;
+  // Track when bubble should next change (for natural timing)
+  let bubbleNextChange: number | null = null;
 
   /**
    * Starts the waiting animation
@@ -76,8 +78,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Update scene state for hop animation
     sceneState.workingTarget = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
 
-    // Reset hop start time so hopping begins fresh
+    // Reset animation timing so hopping begins fresh
     hopStartTime = null;
+    bubbleNextChange = null;
 
     // Render immediately with the new waiting state
     if (elements && isRunning) {
@@ -93,11 +96,12 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     setAnimationActive(false);
     resetAnimation();
 
-    // Clear scene state for hop animation
+    // Clear scene state for animations
     sceneState.workingTarget = null;
     sceneState.hopFrame = false;
     sceneState.bubbleFrame = false;
     hopStartTime = null;
+    bubbleNextChange = null;
 
     // Render status without waiting state
     if (elements && isRunning) {
@@ -296,16 +300,27 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
             sceneState.hopFrame = !sceneState.hopFrame;
             sceneState.bubbleFrame = false;
           } else {
-            // After 3 seconds: bubbles with randomness, NO hopping
+            // After 3 seconds: bubbles with natural timing, NO hopping
             sceneState.hopFrame = false;
-            // Random chance to toggle (20-60%) creates organic, irregular bubbling
-            // Sometimes changes fast, sometimes holds for a while
-            if (Math.random() < 0.3 + Math.random() * 0.3) {
+
+            // Natural bubble timing - each state has its own random duration
+            if (bubbleNextChange === null) {
+              // Set when bubble should next change
+              // ON duration: 400-1200ms, OFF duration: 600-2000ms
+              const duration = sceneState.bubbleFrame
+                ? 400 + Math.random() * 800   // ON: shorter, more energetic
+                : 600 + Math.random() * 1400; // OFF: longer pauses
+              bubbleNextChange = Date.now() + duration;
+            }
+
+            if (Date.now() >= bubbleNextChange) {
               sceneState.bubbleFrame = !sceneState.bubbleFrame;
+              bubbleNextChange = null; // Will set new duration next tick
             }
           }
         } else {
           hopStartTime = null;
+          bubbleNextChange = null;
           sceneState.hopFrame = false;
           sceneState.bubbleFrame = false;
         }
