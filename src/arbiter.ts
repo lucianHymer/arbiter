@@ -168,19 +168,19 @@ export function createArbiterMcpServer(
     tools: [
       tool(
         "spawn_orchestrator",
-        "Summon a new Orchestrator to execute a task. Provide complete context and instructions.",
-        { prompt: z.string().describe("Full task description and context") },
-        async ({ prompt }) => {
+        "Summon a new Orchestrator. They will introduce themselves and await your instructions.",
+        {},
+        async () => {
           const orchNum = getOrchestratorCount() + 1;
 
           // Notify the main app to spawn the orchestrator
-          callbacks.onSpawnOrchestrator(prompt, orchNum);
+          callbacks.onSpawnOrchestrator(orchNum);
 
           return {
             content: [
               {
                 type: "text" as const,
-                text: `Orchestrator ${toRoman(orchNum)} awakens. Your words now reach them.`,
+                text: `Orchestrator ${toRoman(orchNum)} awakens. They will introduce themselves shortly.`,
               },
             ],
           };

@@ -124,3 +124,46 @@ Human → Arbiter (manager, MCP tools) → Orchestrators (workers) → Subagents
 **Files**: src/arbiter.ts, src/router.ts, src/orchestrator.ts
 ---
 
+### [21:26] [architecture] Arbiter UI model - each other's users
+**Details**: The UI is NOT relaying messages between sessions. It's showing THE ARBITER'S CONVERSATION with its "user" correctly labeled.
+
+**Main Chat = Arbiter's perspective:**
+- At first, the human is the Arbiter's user → shows as "You:"
+- Once orchestrator spawned, they become EACH OTHER'S USERS:
+  - Orchestrator is the user of Arbiter → shows as "Conjuring I:"
+  - Arbiter is the user of Orchestrator (watching/guiding)
+- "Arbiter:" = Arbiter's responses to whoever is its current user
+
+**This is NOT message relaying.** It's:
+1. Human talks to Arbiter (human = user)
+2. Arbiter spawns orchestrator → they hook up as each other's users
+3. Now orchestrator talks to Arbiter (orchestrator = user)
+4. UI just shows Arbiter's chat with correct user labels
+
+**Debug Log = ALL raw SDK messages:**
+- Both Arbiter session AND active Orchestrator session
+- Every message flowing through the SDK
+- Properly labeled by source session
+- NOT filtered or processed versions
+**Files**: src/router.ts, src/tui/index.ts
+---
+
+### [22:15] [architecture] Router refactor - remove text tagging, keep forwarding
+**Details**: CRITICAL: The forwarding of messages between Arbiter and Orchestrator is CORRECT and MUST STAY.
+
+The PROBLEM is TEXT TAGGING:
+- `"Orchestrator I: " + text` when forwarding to Arbiter - BAD
+- `"Human: " + text` when forwarding human messages - BAD
+- Echo filtering as band-aid - BAD
+
+The FIX:
+- Keep forwarding (that's the whole point!)
+- Remove text tags - just forward raw text
+- Remove echo filtering - let them figure it out
+- Track message source via mode, not text parsing
+- spawn_orchestrator has no prompt - orchestrator introduces itself
+
+See docs/HANDOFF-router-refactor.md for full implementation details.
+**Files**: src/router.ts, docs/HANDOFF-router-refactor.md
+---
+
