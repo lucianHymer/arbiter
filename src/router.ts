@@ -101,8 +101,8 @@ export class Router {
   // Track tool call counts per orchestrator
   private toolCallCounts: Map<string, number> = new Map();
 
-  // Pending message to send to orchestrator after spawn
-  private pendingOrchestratorPrompt: string | null = null;
+  // Pending orchestrator spawn flag
+  private pendingOrchestratorSpawn: boolean = false;
   private pendingOrchestratorNumber: number = 0;
 
   // Track if we're currently processing messages
@@ -142,8 +142,8 @@ export class Router {
       // Send directly to Arbiter
       await this.sendToArbiter(text);
     } else {
-      // Inject to Arbiter with Human tag
-      await this.sendToArbiter(`Human: ${text}`);
+      // Inject to Arbiter
+      await this.sendToArbiter(text);
     }
   }
 
@@ -182,9 +182,9 @@ export class Router {
 
     // Create callbacks for MCP tools
     const arbiterCallbacks: ArbiterCallbacks = {
-      onSpawnOrchestrator: (prompt: string, orchestratorNumber: number) => {
-        // Store the prompt and number to spawn after current processing
-        this.pendingOrchestratorPrompt = prompt;
+      onSpawnOrchestrator: (orchestratorNumber: number) => {
+        // Store the number to spawn after current processing
+        this.pendingOrchestratorSpawn = true;
         this.pendingOrchestratorNumber = orchestratorNumber;
       },
       onDisconnectOrchestrators: () => {
@@ -257,10 +257,7 @@ export class Router {
   /**
    * Creates and starts an Orchestrator session
    */
-  private async startOrchestratorSession(
-    prompt: string,
-    number: number
-  ): Promise<void> {
+  private async startOrchestratorSession(number: number): Promise<void> {
     // Notify that we're waiting for Orchestrator
     this.callbacks.onWaitingStart?.('orchestrator');
 
@@ -335,9 +332,9 @@ export class Router {
       ],
     };
 
-    // Create the orchestrator session with the initial prompt from Arbiter
+    // Create the orchestrator session - orchestrator introduces themselves
     this.orchestratorQuery = query({
-      prompt,
+      prompt: "Introduce yourself and await instructions from the Arbiter.",
       options,
     });
 
@@ -441,25 +438,14 @@ export class Router {
     // Log the message (always, for history/debug)
     addMessage(this.state, "arbiter", text);
 
-    // Filter out echo garbage when orchestrator is active
-    // Echo messages typically contain "Orchestrator" or "Human:" at the start
-    // which means Arbiter is just parroting back routing prefixes
-    const looksLikeEcho = this.state.mode === "arbiter_to_orchestrator" &&
-      (text.includes("Orchestrator") && text.includes(":") ||
-       text.startsWith("Human:") ||
-       text.includes("Human: Orchestrator"));
-
-    // ALWAYS log to debug (logbook) - even filtered messages
+    // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
       type: 'message',
       speaker: 'arbiter',
       text,
-      filtered: looksLikeEcho,
     });
 
-    if (!looksLikeEcho) {
-      this.callbacks.onArbiterMessage(text);
-    }
+    this.callbacks.onArbiterMessage(text);
 
     // If we're in orchestrator mode, forward to the orchestrator
     if (
@@ -496,8 +482,8 @@ export class Router {
     // Notify callback
     this.callbacks.onOrchestratorMessage(orchNumber, text);
 
-    // Route to Arbiter with tag
-    await this.sendToArbiter(`${orchLabel}: ${text}`);
+    // Route to Arbiter
+    await this.sendToArbiter(text);
   }
 
   /**
@@ -525,13 +511,12 @@ export class Router {
       this.callbacks.onWaitingStop?.();
 
       // Check if we need to spawn an orchestrator
-      if (this.pendingOrchestratorPrompt) {
-        const prompt = this.pendingOrchestratorPrompt;
+      if (this.pendingOrchestratorSpawn) {
         const number = this.pendingOrchestratorNumber;
-        this.pendingOrchestratorPrompt = null;
+        this.pendingOrchestratorSpawn = false;
         this.pendingOrchestratorNumber = 0;
 
-        await this.startOrchestratorSession(prompt, number);
+        await this.startOrchestratorSession(number);
       }
     } catch (error) {
       console.error("Error processing Arbiter messages:", error);
