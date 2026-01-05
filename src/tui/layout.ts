@@ -165,9 +165,16 @@ export function createLayout(): LayoutElements {
     screen.render();
   });
 
-  // Set up quit key bindings
-  screen.key(['escape', 'q', 'C-c'], () => {
-    return process.exit(0);
+  // Set up quit key bindings on screen level
+  screen.key(['C-c', 'C-z'], () => {
+    screen.destroy();
+    process.exit(0);
+  });
+
+  // Also bind quit keys on the input box since it captures focus
+  inputBox.key(['C-c', 'C-z'], () => {
+    screen.destroy();
+    process.exit(0);
   });
 
   return {
