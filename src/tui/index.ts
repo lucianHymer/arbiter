@@ -296,9 +296,13 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
             sceneState.hopFrame = !sceneState.hopFrame;
             sceneState.bubbleFrame = false;
           } else {
-            // After 3 seconds: bubbles, NO hopping
+            // After 3 seconds: bubbles with randomness, NO hopping
             sceneState.hopFrame = false;
-            sceneState.bubbleFrame = !sceneState.bubbleFrame;
+            // Random chance to toggle (20-60%) creates organic, irregular bubbling
+            // Sometimes changes fast, sometimes holds for a while
+            if (Math.random() < 0.3 + Math.random() * 0.3) {
+              sceneState.bubbleFrame = !sceneState.bubbleFrame;
+            }
           }
         } else {
           hopStartTime = null;
