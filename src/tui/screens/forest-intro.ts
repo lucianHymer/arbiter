@@ -3,6 +3,7 @@
  *
  * A narrative intro screen between character select and main TUI.
  * Shows a forest scene with the selected character walking through it.
+ * Features Zelda-style dialogue box overlays.
  */
 
 import {
@@ -35,6 +36,16 @@ const CYAN = '\x1b[36m';
 const BRIGHT_YELLOW = '\x1b[93m';
 const BRIGHT_RED = '\x1b[91m';
 const BOLD = '\x1b[1m';
+const BG_BLACK = '\x1b[40m';
+const WHITE = '\x1b[97m';
+
+// Box-drawing characters for Zelda-style dialogue box
+const BOX_TOP_LEFT = '╔';
+const BOX_TOP_RIGHT = '╗';
+const BOX_BOTTOM_LEFT = '╚';
+const BOX_BOTTOM_RIGHT = '╝';
+const BOX_HORIZONTAL = '═';
+const BOX_VERTICAL = '║';
 
 /**
  * Move cursor to a specific position
@@ -48,7 +59,7 @@ function moveCursor(row: number, col: number): string {
  * Layout (7x5):
  *   0: [pine] [pine]  [bare]  [grass] [bare]  [pine]  [pine]
  *   1: [pine] [grass] [grass] [grass] [grass] [grass] [pine]
- *   2: [tree] [path...]                               [tree]  <- character walks here
+ *   2: [path] [path...]                        [path] [path]  <- character walks here (path through both edges)
  *   3: [pine] [grass] [grass] [grass] [grass] [grass] [pine]
  *   4: [pine] [bare]  [grass] [grass] [grass] [bare]  [pine]
  */
@@ -60,13 +71,13 @@ function createForestScene(characterTile: number | null, characterCol: number): 
     for (let col = 0; col < SCENE_WIDTH; col++) {
       let tile: number = TILE.GRASS;
 
-      // Left edge trees
-      if (col === 0) {
+      // Left edge trees (except path row)
+      if (col === 0 && row !== 2) {
         tile = TILE.PINE_TREE;
       }
 
-      // Right edge trees
-      if (col === 6) {
+      // Right edge trees (except path row)
+      if (col === 6 && row !== 2) {
         tile = TILE.PINE_TREE;
       }
 
@@ -82,8 +93,8 @@ function createForestScene(characterTile: number | null, characterCol: number): 
         if (col === 1 || col === 5) tile = TILE.BARE_TREE;
       }
 
-      // Middle path row (row 2) - sparse grass for path
-      if (row === 2 && col >= 1 && col <= 5) {
+      // Middle path row (row 2) - sparse grass for path ALL THE WAY THROUGH (col 0 to 6)
+      if (row === 2) {
         tile = TILE.GRASS_SPARSE;
       }
 
@@ -149,6 +160,39 @@ function centerText(text: string, width: number = 112): string {
 }
 
 /**
+ * Render a Zelda-style dialogue box overlay on top of the scene
+ * Uses ANSI box-drawing characters for the border
+ */
+function renderDialogueBox(
+  startRow: number,
+  startCol: number,
+  width: number,
+  lines: string[]
+): void {
+  const height = lines.length + 2; // +2 for top and bottom border
+
+  // Top border
+  process.stdout.write(moveCursor(startRow, startCol));
+  process.stdout.write(
+    `${BG_BLACK}${WHITE}${BOX_TOP_LEFT}${BOX_HORIZONTAL.repeat(width - 2)}${BOX_TOP_RIGHT}${RESET}`
+  );
+
+  // Content lines
+  for (let i = 0; i < lines.length; i++) {
+    process.stdout.write(moveCursor(startRow + 1 + i, startCol));
+    const line = lines[i];
+    const paddedLine = line.padEnd(width - 2, ' ');
+    process.stdout.write(`${BG_BLACK}${WHITE}${BOX_VERTICAL}${paddedLine}${BOX_VERTICAL}${RESET}`);
+  }
+
+  // Bottom border
+  process.stdout.write(moveCursor(startRow + height - 1, startCol));
+  process.stdout.write(
+    `${BG_BLACK}${WHITE}${BOX_BOTTOM_LEFT}${BOX_HORIZONTAL.repeat(width - 2)}${BOX_BOTTOM_RIGHT}${RESET}`
+  );
+}
+
+/**
  * Wait for Enter key press
  */
 function waitForEnter(): Promise<void> {
@@ -201,44 +245,42 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   process.stdin.setEncoding('utf8');
 
   const sceneStartRow = 3;
-  const textRow = sceneStartRow + SCENE_HEIGHT * CHAR_HEIGHT + 2;
+  // Calculate dialogue box position (overlayed on the scene)
+  // Center the dialogue box horizontally (112 char scene width, ~40 char box)
+  const dialogueBoxWidth = 40;
+  const dialogueBoxCol = Math.floor((112 - dialogueBoxWidth) / 2) + 1;
+  // Position dialogue box in the lower portion of the scene
+  const dialogueBoxRow = sceneStartRow + SCENE_HEIGHT * CHAR_HEIGHT - 6;
 
   // -------------------------------------------------------------------------
-  // Phase 1: Show forest scene with first dramatic narrative text
+  // Phase 1: Show forest scene with Zelda-style dialogue box overlay
+  // Auto-start walking after ~2 seconds (no Enter needed)
   // -------------------------------------------------------------------------
 
   // Render initial forest scene (no character yet)
   const initialScene = createForestScene(null, -1);
   renderForestScene(tileset, grassTile, initialScene, sceneStartRow);
 
-  // Display first dramatic multi-line narrative text
-  process.stdout.write(moveCursor(textRow, 1));
-  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}YOU WANDER THROUGH${RESET}`));
-  process.stdout.write(moveCursor(textRow + 1, 1));
-  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}THE FOREST...${RESET}`));
-  process.stdout.write(moveCursor(textRow + 3, 1));
-  process.stdout.write(centerText(`${BOLD}${YELLOW}TOWARDS A CLEARING AHEAD${RESET}`));
+  // Render Zelda-style dialogue box overlay with first text
+  renderDialogueBox(dialogueBoxRow, dialogueBoxCol, dialogueBoxWidth, [
+    '',
+    `${BOLD}${BRIGHT_YELLOW}   YOU WANDER THROUGH${RESET}`,
+    `${BOLD}${BRIGHT_YELLOW}     THE FOREST...${RESET}`,
+    '',
+    `${BOLD}${YELLOW}  TOWARDS A CLEARING AHEAD${RESET}`,
+    '',
+  ]);
 
-  // Show prompt
-  const promptRowPhase1 = textRow + 5;
-  process.stdout.write(moveCursor(promptRowPhase1, 1));
-  process.stdout.write(centerText(`${CYAN}Press Enter to continue...${RESET}`));
-
-  // Wait for Enter
-  await waitForEnter();
-
-  // Clear the text area
-  for (let i = 0; i < 6; i++) {
-    process.stdout.write(moveCursor(textRow + i, 1));
-    process.stdout.write(' '.repeat(112));
-  }
+  // Wait ~2 seconds, then auto-start walking (no Enter needed)
+  await sleep(2000);
 
   // -------------------------------------------------------------------------
-  // Phase 2: Animate character walking across the screen (starts immediately)
+  // Phase 2: Animate character walking across the screen
+  // Character walks from left edge (col 0) to right edge (col 6) and STOPS there
   // -------------------------------------------------------------------------
 
-  // Walk from left (-1, off-screen) to right (7, off-screen)
-  for (let col = -1; col <= SCENE_WIDTH; col++) {
+  // Walk from left (col 0) to right edge (col 6) - character stops at rightmost visible position
+  for (let col = 0; col <= SCENE_WIDTH - 1; col++) {
     // Create scene with character at current position
     const walkScene = createForestScene(selectedCharacter, col);
     renderForestScene(tileset, grassTile, walkScene, sceneStartRow);
@@ -248,42 +290,23 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3: Show EPIC second narrative text with dramatic title reveal
+  // Phase 3: Show second dialogue with "THE ARBITER" text
+  // Character stays at right edge, wait for Enter here
   // -------------------------------------------------------------------------
 
-  // Render final forest scene (character has exited)
-  const finalScene = createForestScene(null, -1);
+  // Render scene with character at rightmost position (col 6)
+  const finalScene = createForestScene(selectedCharacter, SCENE_WIDTH - 1);
   renderForestScene(tileset, grassTile, finalScene, sceneStartRow);
 
-  // Display EPIC multi-line title with dramatic styling
-  // Line 1: "YOU APPROACH THE LAIR OF"
-  process.stdout.write(moveCursor(textRow, 1));
-  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}YOU APPROACH THE LAIR OF${RESET}`));
-
-  // Dramatic pause
-  await sleep(600);
-
-  // Line 2: "THE ARBITER" - in red/orange for emphasis
-  process.stdout.write(moveCursor(textRow + 2, 1));
-  process.stdout.write(centerText(`${BOLD}${BRIGHT_RED}THE ARBITER${RESET}`));
-
-  // Dramatic pause
-  await sleep(800);
-
-  // Lines 3-5: The dramatic subtitle
-  process.stdout.write(moveCursor(textRow + 4, 1));
-  process.stdout.write(centerText(`${BOLD}${YELLOW}OF THAT WHICH WAS,${RESET}`));
-  await sleep(400);
-  process.stdout.write(moveCursor(textRow + 5, 1));
-  process.stdout.write(centerText(`${BOLD}${YELLOW}THAT WHICH IS,${RESET}`));
-  await sleep(400);
-  process.stdout.write(moveCursor(textRow + 6, 1));
-  process.stdout.write(centerText(`${BOLD}${BRIGHT_YELLOW}AND THAT WHICH SHALL COME TO BE${RESET}`));
-
-  // Show prompt
-  const promptRowPhase3 = textRow + 8;
-  process.stdout.write(moveCursor(promptRowPhase3, 1));
-  process.stdout.write(centerText(`${CYAN}Press Enter to continue...${RESET}`));
+  // Render second Zelda-style dialogue box with THE ARBITER reveal
+  renderDialogueBox(dialogueBoxRow, dialogueBoxCol, dialogueBoxWidth, [
+    '',
+    `${BOLD}${BRIGHT_YELLOW}  YOU APPROACH THE LAIR OF${RESET}`,
+    '',
+    `${BOLD}${BRIGHT_RED}       THE ARBITER${RESET}`,
+    '',
+    `${CYAN}     Press Enter to continue...${RESET}`,
+  ]);
 
   // Wait for Enter
   await waitForEnter();
