@@ -52,6 +52,33 @@ npm start
 - `Tab` - Toggle logbook (raw log view)
 - `Ctrl+C` or `q` - Quit
 
+## Testing
+
+### Headless End-to-End Test
+
+There's a headless test that exercises the full system without the TUI:
+
+```bash
+npm run test:headless
+```
+
+This test:
+1. Creates initial state and a mock router with console-logging callbacks
+2. Starts the Arbiter session
+3. Sends a test message ("Hello, what are you?")
+4. Waits for and logs the Arbiter response
+5. Sends a second message asking to spawn an orchestrator
+6. Watches the orchestrator spawn, do work, and report back
+7. Logs all context percentages, tool usage, and messages
+
+**Why this is useful:**
+- Tests the full SDK integration without needing an interactive terminal
+- Verifies Arbiter → Orchestrator → Subagent flow works
+- Can run in CI or non-TTY environments
+- Great for debugging routing and session issues
+
+The test file is at `src/test-headless.ts` - you can modify it to test specific scenarios.
+
 ## Architecture
 
 See `arbiter-architecture.md` for detailed architecture documentation.
