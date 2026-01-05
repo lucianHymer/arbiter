@@ -116,6 +116,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
   function doRenderTileScene(): void {
     if (!tileset || !elements || !isRunning) return;
 
+    // Don't render tiles when logbook overlay is shown
+    if (elements.logbookOverlay && !elements.logbookOverlay.hidden) return;
+
     const tileArea = getTileAreaPosition(elements.screen);
     const scene = createScene(sceneState);
     const rendered = renderTileScene(
