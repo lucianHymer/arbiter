@@ -283,6 +283,11 @@ function renderTileDialogue(
     process.stdout.write(brRendered[charRow]);
   }
 
+  // Sample background color from the center of the dialogue tile
+  // This lets text blend with the tile background instead of showing terminal black
+  const bgSamplePixel = topLeft[8][8]; // Center pixel of top-left tile
+  const textBgColor = `\x1b[48;2;${bgSamplePixel.r};${bgSamplePixel.g};${bgSamplePixel.b}m`;
+
   // Overlay text in the center of the box
   // Total box height is 16 rows (2 tiles * 8 rows each)
   // Center the text vertically
@@ -295,7 +300,8 @@ function renderTileDialogue(
     // Center each line horizontally within the box
     const padding = Math.max(0, Math.floor((totalWidthChars - visibleLength) / 2));
     process.stdout.write(moveCursor(textStartRow + i, startCol + padding));
-    process.stdout.write(line);
+    // Apply tile background color to text so it blends with the dialogue box
+    process.stdout.write(textBgColor + line + RESET);
   }
 }
 
