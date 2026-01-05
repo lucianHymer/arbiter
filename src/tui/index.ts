@@ -284,17 +284,21 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     animationTimer = new AnimationTimer(() => {
       if (elements && isRunning) {
         if (sceneState.workingTarget) {
-          // Bubbles ALWAYS animate while anyone is working
-          sceneState.bubbleFrame = !sceneState.bubbleFrame;
-
-          // Hopping only for first 3 seconds
+          // Track when work started
           if (hopStartTime === null) {
             hopStartTime = Date.now();
           }
-          if (Date.now() - hopStartTime < 3000) {
+
+          const workingFor = Date.now() - hopStartTime;
+
+          if (workingFor < 3000) {
+            // First 3 seconds: hopping, NO bubbles
             sceneState.hopFrame = !sceneState.hopFrame;
+            sceneState.bubbleFrame = false;
           } else {
+            // After 3 seconds: bubbles, NO hopping
             sceneState.hopFrame = false;
+            sceneState.bubbleFrame = !sceneState.bubbleFrame;
           }
         } else {
           hopStartTime = null;
