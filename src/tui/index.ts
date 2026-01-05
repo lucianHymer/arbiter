@@ -70,6 +70,9 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     setAnimationActive(true);
     resetAnimation();
 
+    // Update scene state for hop animation
+    sceneState.workingTarget = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
+
     // Render immediately with the new waiting state
     if (elements && isRunning) {
       renderStatus(elements, state, waitingState);
@@ -83,6 +86,10 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     waitingState = 'none';
     setAnimationActive(false);
     resetAnimation();
+
+    // Clear scene state for hop animation
+    sceneState.workingTarget = null;
+    sceneState.hopFrame = false;
 
     // Render status without waiting state
     if (elements && isRunning) {
@@ -99,7 +106,13 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
 
     const tileArea = getTileAreaPosition(elements.screen);
     const scene = createScene(sceneState);
-    const rendered = renderTileScene(tileset, scene, sceneState.focusTarget);
+    const rendered = renderTileScene(
+      tileset,
+      scene,
+      sceneState.focusTarget,
+      sceneState.workingTarget,
+      sceneState.hopFrame
+    );
 
     // Split rendered into lines and write each at correct position
     const lines = rendered.split('\n');
@@ -262,12 +275,17 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
     // Create animation timer for campfire/gem animations
     animationTimer = new AnimationTimer(() => {
       if (elements && isRunning) {
+        // Toggle hop frame for bouncing animation when working
+        if (sceneState.workingTarget) {
+          sceneState.hopFrame = !sceneState.hopFrame;
+        }
+
         // Re-render status bar for animated dots
         renderStatus(elements, state, waitingState);
         // Also re-render tile scene
         doRenderTileScene();
       }
-    }, 400);
+    }, 300);
 
     // Start the animation timer
     animationTimer.start();

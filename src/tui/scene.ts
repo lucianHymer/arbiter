@@ -32,6 +32,8 @@ export interface SceneState {
   demonCount: number; // 0-5
   focusTarget: 'human' | 'arbiter' | 'demon' | null;
   selectedCharacter: number; // Tile index 190-197 for selected human character
+  workingTarget: 'arbiter' | 'conjuring' | null; // Who is currently processing
+  hopFrame: boolean; // Alternates true/false for hop animation
 }
 
 /**
@@ -123,6 +125,8 @@ export function createInitialSceneState(): SceneState {
     demonCount: 0,
     focusTarget: null,
     selectedCharacter: TILE.HUMAN_1,
+    workingTarget: null,
+    hopFrame: false,
   };
 }
 
@@ -240,7 +244,9 @@ function getFocusPosition(
 export function renderScene(
   tileset: Tileset,
   scene: TileSpec[][],
-  focusTarget: 'human' | 'arbiter' | 'demon' | null
+  focusTarget: 'human' | 'arbiter' | 'demon' | null,
+  workingTarget: 'arbiter' | 'conjuring' | null = null,
+  hopFrame: boolean = false
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
@@ -313,12 +319,53 @@ export function renderScene(
     renderedTiles.push(renderedRow);
   }
 
+  // Determine which tile position should hop based on workingTarget
+  let hopTilePos: { row: number; col: number } | null = null;
+  if (workingTarget && hopFrame) {
+    if (workingTarget === 'arbiter') {
+      // Arbiter is at row 2, col depends on arbiterPos
+      hopTilePos = { row: 2, col: 2 + arbiterPos };
+    } else if (workingTarget === 'conjuring' && demonCount > 0) {
+      // First demon is at row 2, col 6
+      hopTilePos = { row: 2, col: 6 };
+    }
+  }
+
   // Build output string
+  // When hopping, we need to shift the hopping tile up by 1 row
+  // This means: at the row above, we show the bottom row of the hopping tile
+  // and at the tile's normal position, we show rows shifted up
   let output = '';
   for (let tileRow = 0; tileRow < scene.length; tileRow++) {
     for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
       for (let tileCol = 0; tileCol < scene[tileRow].length; tileCol++) {
-        output += renderedTiles[tileRow][tileCol][charRow];
+        const isHoppingTile = hopTilePos && hopTilePos.row === tileRow && hopTilePos.col === tileCol;
+        const isTileAboveHopping = hopTilePos && hopTilePos.row === tileRow + 1 && hopTilePos.col === tileCol;
+
+        if (isHoppingTile) {
+          // For the hopping tile, show the row below (shifted up)
+          // If charRow is 0, we show nothing special (already handled by tile above)
+          // Otherwise show charRow - 1 if we're hopping, but we need to handle the overlap
+          if (charRow === 0) {
+            // First char row of hopping tile shows second row of the tile
+            output += renderedTiles[tileRow][tileCol][1];
+          } else if (charRow === CHAR_HEIGHT - 1) {
+            // Last char row shows grass (the tile has moved up)
+            output += renderedTiles[tileRow][tileCol][charRow]; // Actually show grass from tile
+          } else {
+            // Show the next row down (shifted up by 1)
+            output += renderedTiles[tileRow][tileCol][charRow + 1];
+          }
+        } else if (isTileAboveHopping) {
+          // For the tile above the hopping tile, the last row shows the first row of the hopping tile
+          if (charRow === CHAR_HEIGHT - 1) {
+            output += renderedTiles[tileRow + 1][tileCol][0];
+          } else {
+            output += renderedTiles[tileRow][tileCol][charRow];
+          }
+        } else {
+          output += renderedTiles[tileRow][tileCol][charRow];
+        }
       }
       output += '\n';
     }
