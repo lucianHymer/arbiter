@@ -40,14 +40,14 @@ const KEY_ENTER_ALT = '\n';
 const KEY_CTRL_C = '\u0003';
 
 // ANSI color codes
-const YELLOW = '\x1b[33m';
-const CYAN = '\x1b[36m';
-const MAGENTA = '\x1b[35m';
-const BRIGHT_YELLOW = '\x1b[93m';
-const BRIGHT_RED = '\x1b[91m';
 const BOLD = '\x1b[1m';
-const BG_BLACK = '\x1b[40m';
 const WHITE = '\x1b[97m';
+const BG_BLACK = '\x1b[40m';
+
+// True color theme colors (RGB)
+const COLOR_ARBITER = '\x1b[38;2;100;255;255m';  // Bright cyan for THE ARBITER
+const COLOR_WAS = '\x1b[38;2;100;200;255m';      // Blue-cyan for "WAS"
+const COLOR_IS = '\x1b[38;2;200;100;255m';       // Purple for "IS"
 
 /**
  * Apply rainbow colors to text (each character gets a different color from the spectrum)
@@ -480,9 +480,9 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
     `${WHITE}You approach the lair of${RESET}`,
     '',
-    `${BOLD}\x1b[38;2;100;255;255mTHE ARBITER${RESET}`,
-    `${WHITE}OF THAT WHICH \x1b[38;2;100;200;255mWAS${WHITE},${RESET}`,
-    `${WHITE}THAT WHICH \x1b[38;2;200;100;255mIS${WHITE},${RESET}`,
+    `${BOLD}${COLOR_ARBITER}THE ARBITER${RESET}`,
+    `${WHITE}OF THAT WHICH ${COLOR_WAS}WAS${WHITE},${RESET}`,
+    `${WHITE}THAT WHICH ${COLOR_IS}IS${WHITE},${RESET}`,
     `${WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
     '',
     `${WHITE}Press Enter to continue...${RESET}`,
