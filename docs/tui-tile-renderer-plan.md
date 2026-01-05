@@ -1,5 +1,9 @@
 # TUI Tile Renderer Implementation Plan
 
+> **STATUS: PROTOTYPE COMPLETE**
+> See `docs/tui-tile-renderer-implementation.md` for the working implementation guide.
+> Run `npm run demo:scene` to see the working animated demo.
+
 ## Overview
 
 We're rebuilding the Arbiter TUI to use pixel-based tile rendering instead of ASCII art sprites. This will give us a proper roguelike aesthetic using the Jerom 16x16 Fantasy Tileset.

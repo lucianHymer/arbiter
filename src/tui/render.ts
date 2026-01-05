@@ -464,8 +464,8 @@ export function renderStatus(
   if (state.currentOrchestrator) {
     // Orchestrator status line
     const orchNumeral = toRoman(state.currentOrchestrator.number);
-    const orchLabel = `{cyan-fg}Wizard ${orchNumeral}{/cyan-fg}`;
-    const orchLabelLen = 6 + orchNumeral.length + 1; // "Wizard " + numeral
+    const orchLabel = `{cyan-fg}Conjuring ${orchNumeral}{/cyan-fg}`;
+    const orchLabelLen = 9 + orchNumeral.length + 1; // "Conjuring " + numeral
     const orchBar = renderProgressBar(state.currentOrchestrator.contextPercent, barWidth);
     const orchPercent = `${Math.round(state.currentOrchestrator.contextPercent)}%`.padStart(4);
     const orchDashes = createDashLine(
@@ -486,13 +486,13 @@ export function renderStatus(
     } else if (waitingState === 'orchestrator') {
       // Show animated dots when waiting for orchestrator response
       const dots = getAnimatedDots();
-      const waitingText = `The wizard works${dots}`;
+      const waitingText = `The conjuring works${dots}`;
       const waitingPadding = ' '.repeat(
         Math.max(0, effectiveWidth - waitingText.length - logbookHintLen - 4)
       );
       toolLine = `${BOX_CHARS.vertical}  ${waitingText}${waitingPadding}${logbookHint}${BOX_CHARS.vertical}`;
     } else {
-      const workingText = 'The wizard contemplates...';
+      const workingText = 'The conjuring contemplates...';
       const workingPadding = ' '.repeat(
         Math.max(0, effectiveWidth - workingText.length - logbookHintLen - 4)
       );

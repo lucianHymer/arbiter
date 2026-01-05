@@ -39,3 +39,24 @@
 **Files**: src/index.ts, src/router.ts, src/state.ts, src/tui/index.ts, src/tui/layout.ts, src/tui/render.ts
 ---
 
+### [19:04] [tui] Tile-based TUI renderer implementation
+**Details**: Built a working tile-based renderer using Jerom 16x16 Fantasy Tileset.
+
+Key findings:
+- True color ANSI codes work (\x1b[48;2;R;G;Bm for bg, \x1b[38;2;R;G;Bm for fg)
+- 256-color ANSI does NOT work properly
+- Blessed does NOT pass through ANSI codes - must use process.stdout.write() directly
+- Half-block technique: Use ▄ character with bg=top pixel, fg=bottom pixel
+- Each 16×16 tile = 16 chars wide × 8 rows tall
+- Alpha threshold = 1 (pixels with alpha < 1 are transparent)
+- Tiles < 80 have own backgrounds, tiles >= 80 must composite on grass (tile 50)
+- Focus overlay is tile 270 - corner brackets to show active speaker
+- Scene is 7×6 tiles (112 chars × 48 rows)
+- Don't clear screen on animation frames (causes flashing) - just cursor home and overwrite
+
+Working demos:
+- npm run test:tiles:raw - all tiles at various scales
+- npm run demo:scene - animated unified scene with arbiter walking, demons spawning, focus overlay
+**Files**: src/tui/tile-scene-demo.ts, src/tui/tile-test-raw.ts, docs/tui-tile-renderer-implementation.md, docs/TILE_TUI_INTEGRATION_PROMPT.md
+---
+

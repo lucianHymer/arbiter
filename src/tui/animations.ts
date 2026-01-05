@@ -85,7 +85,7 @@ export function getWaitingText(waitingFor: 'arbiter' | 'orchestrator'): string {
   if (waitingFor === 'arbiter') {
     return `Awaiting the Arbiter${dots}`;
   } else {
-    return `The wizards work${dots}`;
+    return `The conjurings work${dots}`;
   }
 }
 

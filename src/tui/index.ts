@@ -381,7 +381,7 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
         }
 
         // Append to AIM-style chat log
-        elements.chatLog.log('{cyan-fg}Wizard ' + toRoman(orchestratorNumber) + ':{/cyan-fg} ' + text);
+        elements.chatLog.log('{cyan-fg}Conjuring ' + toRoman(orchestratorNumber) + ':{/cyan-fg} ' + text);
         doRenderTileScene();
       },
 
