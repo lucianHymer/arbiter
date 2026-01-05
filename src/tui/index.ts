@@ -1,6 +1,7 @@
 // TUI module entry point
 // RPG-style terminal interface with wizard council theme
 
+import blessed from 'blessed';
 import { AppState, toRoman } from '../state.js';
 import { RouterCallbacks } from '../router.js';
 import { createLayout, LayoutElements, appendToLogbook } from './layout.js';
@@ -141,7 +142,69 @@ export function createTUI(state: AppState): TUI {
     // We just need to hook into the show event to update content
     logbookOverlay.on('show', () => {
       updateLogbookOverlay();
+      updateLogbookTitle();
     });
+
+    // Add 'd' key handler to toggle between summary and debug modes
+    logbookOverlay.key(['d', 'D'], () => {
+      if (!logbook) return;
+
+      // Toggle the mode
+      logbook.toggleMode();
+
+      // Refresh the display
+      updateLogbookOverlay();
+
+      // Update the logbook title to show current mode
+      updateLogbookTitle();
+
+      screen.render();
+    });
+  }
+
+  /**
+   * Updates the logbook title bar to show current mode
+   */
+  function updateLogbookTitle(): void {
+    if (!elements || !elements.logbookOverlay || !logbook) return;
+
+    const { screen } = elements;
+    const mode = logbook.getMode();
+    const modeLabel = mode === 'summary' ? 'SUMMARY' : 'DEBUG';
+
+    // Find the title box (first child of logbookOverlay)
+    const titleBox = elements.logbookOverlay.children[0] as blessed.Widgets.BoxElement;
+    if (!titleBox) return;
+
+    const width = Math.max((screen.width as number) - 2, 78);
+    const title = `LOGBOOK [${modeLabel}]`;
+    const hint = '[D] Toggle Mode  [Ctrl+O] Close';
+
+    // Box drawing characters
+    const BOX_CHARS = {
+      topLeft: '\u2554',     // ╔
+      topRight: '\u2557',    // ╗
+      horizontal: '\u2550',  // ═
+      vertical: '\u2551',    // ║
+      leftT: '\u2560',       // ╠
+      rightT: '\u2563',      // ╣
+    };
+
+    const topBorder = BOX_CHARS.topLeft + BOX_CHARS.horizontal.repeat(width) + BOX_CHARS.topRight;
+
+    const titlePadding = Math.max(0, Math.floor((width - title.length) / 2));
+    const hintStart = width - hint.length - 2;
+
+    let titleLine = BOX_CHARS.vertical + ' '.repeat(titlePadding) + `{bold}${title}{/bold}`;
+    const currentLen = titlePadding + title.length;
+    const spacesToHint = hintStart - currentLen;
+    titleLine += ' '.repeat(Math.max(0, spacesToHint)) + `{gray-fg}${hint}{/gray-fg}`;
+    const remainingSpace = width - (titlePadding + title.length + Math.max(0, spacesToHint) + hint.length);
+    titleLine += ' '.repeat(Math.max(0, remainingSpace)) + BOX_CHARS.vertical;
+
+    const separator = BOX_CHARS.leftT + BOX_CHARS.horizontal.repeat(width) + BOX_CHARS.rightT;
+
+    titleBox.setContent(topBorder + '\n' + titleLine + '\n' + separator);
   }
 
   /**
