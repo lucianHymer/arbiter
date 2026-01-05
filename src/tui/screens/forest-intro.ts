@@ -19,7 +19,16 @@ import {
   CURSOR_HOME,
   HIDE_CURSOR,
   SHOW_CURSOR,
+  RGB,
 } from '../tileset.js';
+
+// Dialogue box tile indices (2x2 tile message window)
+const DIALOGUE_TILES = {
+  TOP_LEFT: 38,
+  TOP_RIGHT: 39,
+  BOTTOM_LEFT: 48,
+  BOTTOM_RIGHT: 49,
+};
 
 // Scene dimensions: 7 tiles wide x 5 tiles tall
 const SCENE_WIDTH = 7;
@@ -160,8 +169,135 @@ function centerText(text: string, width: number = 112): string {
 }
 
 /**
+ * Strip ANSI escape codes from a string to get visible length
+ */
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\x1b\[[0-9;]*m/g, '');
+}
+
+/**
+ * Render a tile-based dialogue box using tiles 38-39 (top) and 48-49 (bottom)
+ * Creates a 2x2 tile frame with text overlaid in the center
+ *
+ * The tiles form:
+ * [38][39]  = top-left, top-right (32 chars wide x 8 rows)
+ * [48][49]  = bottom-left, bottom-right (32 chars wide x 8 rows)
+ *
+ * Total box: 32 chars wide x 16 rows tall (2 tiles x 2 tiles)
+ *
+ * For wider text, we extend the box horizontally by repeating middle sections
+ */
+function renderTileDialogue(
+  tileset: Tileset,
+  startRow: number,
+  startCol: number,
+  lines: string[],
+  boxWidthTiles: number = 4 // Width in tiles (minimum 2)
+): void {
+  // Extract the 4 corner dialogue tiles
+  const topLeft = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
+  const topRight = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
+  const bottomLeft = extractTile(tileset, DIALOGUE_TILES.BOTTOM_LEFT);
+  const bottomRight = extractTile(tileset, DIALOGUE_TILES.BOTTOM_RIGHT);
+
+  // Render each tile to string arrays
+  const tlRendered = renderTile(topLeft);
+  const trRendered = renderTile(topRight);
+  const blRendered = renderTile(bottomLeft);
+  const brRendered = renderTile(bottomRight);
+
+  // For a wider box, we need middle fill tiles
+  // Extract a middle section from the right edge of top-left and left edge of top-right
+  // to create a seamless horizontal expansion
+  const middleTopRendered: string[] = [];
+  const middleBottomRendered: string[] = [];
+
+  // Create middle fill by extracting columns from the tiles
+  // Use the rightmost column of top-left and leftmost of top-right as patterns
+  for (let row = 0; row < CHAR_HEIGHT; row++) {
+    // For middle sections, create a solid fill based on the tile edge colors
+    // Extract a 16-char wide section that can be repeated
+    const middleTopRow = createMiddleFill(topLeft, topRight, row);
+    const middleBottomRow = createMiddleFill(bottomLeft, bottomRight, row);
+    middleTopRendered.push(middleTopRow);
+    middleBottomRendered.push(middleBottomRow);
+  }
+
+  // Calculate actual width in characters (16 chars per tile)
+  const tileWidth = 16;
+  const totalWidthChars = boxWidthTiles * tileWidth;
+  const middleTiles = Math.max(0, boxWidthTiles - 2);
+
+  // Render top row of tiles
+  for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+    process.stdout.write(moveCursor(startRow + charRow, startCol));
+    process.stdout.write(tlRendered[charRow]);
+    for (let m = 0; m < middleTiles; m++) {
+      process.stdout.write(middleTopRendered[charRow]);
+    }
+    process.stdout.write(trRendered[charRow]);
+  }
+
+  // Render bottom row of tiles
+  for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+    process.stdout.write(moveCursor(startRow + CHAR_HEIGHT + charRow, startCol));
+    process.stdout.write(blRendered[charRow]);
+    for (let m = 0; m < middleTiles; m++) {
+      process.stdout.write(middleBottomRendered[charRow]);
+    }
+    process.stdout.write(brRendered[charRow]);
+  }
+
+  // Overlay text in the center of the box
+  // Total box height is 16 rows (2 tiles * 8 rows each)
+  // Center the text vertically
+  const boxHeight = CHAR_HEIGHT * 2; // 16 rows
+  const textStartRow = startRow + Math.floor((boxHeight - lines.length) / 2);
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const visibleLength = stripAnsi(line).length;
+    // Center each line horizontally within the box
+    const padding = Math.max(0, Math.floor((totalWidthChars - visibleLength) / 2));
+    process.stdout.write(moveCursor(textStartRow + i, startCol + padding));
+    process.stdout.write(line);
+  }
+}
+
+/**
+ * Create a middle fill row by blending the right edge of left tile with left edge of right tile
+ * This creates a seamless horizontal fill for expanding the dialogue box
+ */
+function createMiddleFill(leftTile: RGB[][], rightTile: RGB[][], charRow: number): string {
+  // Each char row corresponds to 2 pixel rows (due to half-block rendering)
+  const pixelRowTop = charRow * 2;
+  const pixelRowBot = pixelRowTop + 1;
+
+  let result = '';
+
+  // Use the full width of a tile (16 pixels = 16 chars)
+  for (let x = 0; x < 16; x++) {
+    // Sample from middle of left tile for fill pattern
+    const sampleX = 8; // Middle column
+
+    const topPixel = leftTile[pixelRowTop][sampleX];
+    const botPixel = leftTile[pixelRowBot]?.[sampleX] || topPixel;
+
+    // True color ANSI: background = top pixel, foreground = bottom pixel
+    result += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
+    result += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
+    result += '▄';
+  }
+  result += RESET;
+
+  return result;
+}
+
+/**
  * Render a Zelda-style dialogue box overlay on top of the scene
  * Uses ANSI box-drawing characters for the border
+ * @deprecated Use renderTileDialogue for tile-based rendering
  */
 function renderDialogueBox(
   startRow: number,
@@ -246,14 +382,15 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
 
   const sceneStartRow = 3;
   // Calculate dialogue box position (overlayed on the scene)
-  // Center the dialogue box horizontally (112 char scene width, ~40 char box)
-  const dialogueBoxWidth = 40;
-  const dialogueBoxCol = Math.floor((112 - dialogueBoxWidth) / 2) + 1;
-  // Position dialogue box in the lower portion of the scene
-  const dialogueBoxRow = sceneStartRow + SCENE_HEIGHT * CHAR_HEIGHT - 6;
+  // Tile-based dialogue box: 4 tiles wide = 64 chars (centered in 112 char scene)
+  const dialogueBoxWidthTiles = 5; // 5 tiles = 80 chars wide for full title
+  const dialogueBoxWidthChars = dialogueBoxWidthTiles * 16;
+  const dialogueBoxCol = Math.floor((112 - dialogueBoxWidthChars) / 2) + 1;
+  // Position dialogue box in the lower portion of the scene (16 rows tall = 2 tile rows)
+  const dialogueBoxRow = sceneStartRow + SCENE_HEIGHT * CHAR_HEIGHT - 16;
 
   // -------------------------------------------------------------------------
-  // Phase 1: Show forest scene with Zelda-style dialogue box overlay
+  // Phase 1: Show forest scene with tile-based dialogue box overlay
   // Auto-start walking after ~2 seconds (no Enter needed)
   // -------------------------------------------------------------------------
 
@@ -261,15 +398,13 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   const initialScene = createForestScene(null, -1);
   renderForestScene(tileset, grassTile, initialScene, sceneStartRow);
 
-  // Render Zelda-style dialogue box overlay with first text
-  renderDialogueBox(dialogueBoxRow, dialogueBoxCol, dialogueBoxWidth, [
+  // Render tile-based dialogue box overlay with first text
+  renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
+    `${BOLD}${BRIGHT_YELLOW}YOU WANDER THROUGH${RESET}`,
+    `${BOLD}${BRIGHT_YELLOW}THE FOREST...${RESET}`,
     '',
-    `${BOLD}${BRIGHT_YELLOW}   YOU WANDER THROUGH${RESET}`,
-    `${BOLD}${BRIGHT_YELLOW}     THE FOREST...${RESET}`,
-    '',
-    `${BOLD}${YELLOW}  TOWARDS A CLEARING AHEAD${RESET}`,
-    '',
-  ]);
+    `${BOLD}${YELLOW}TOWARDS A CLEARING AHEAD${RESET}`,
+  ], dialogueBoxWidthTiles);
 
   // Wait ~2 seconds, then auto-start walking (no Enter needed)
   await sleep(2000);
@@ -290,7 +425,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   }
 
   // -------------------------------------------------------------------------
-  // Phase 3: Show second dialogue with "THE ARBITER" text
+  // Phase 3: Show second dialogue with "THE ARBITER" full title
   // Character stays at right edge, wait for Enter here
   // -------------------------------------------------------------------------
 
@@ -298,15 +433,17 @@ export async function showForestIntro(selectedCharacter: number): Promise<void> 
   const finalScene = createForestScene(selectedCharacter, SCENE_WIDTH - 1);
   renderForestScene(tileset, grassTile, finalScene, sceneStartRow);
 
-  // Render second Zelda-style dialogue box with THE ARBITER reveal
-  renderDialogueBox(dialogueBoxRow, dialogueBoxCol, dialogueBoxWidth, [
+  // Render tile-based dialogue box with THE ARBITER full title reveal
+  renderTileDialogue(tileset, dialogueBoxRow, dialogueBoxCol, [
+    `${BOLD}${BRIGHT_YELLOW}YOU APPROACH THE LAIR OF${RESET}`,
     '',
-    `${BOLD}${BRIGHT_YELLOW}  YOU APPROACH THE LAIR OF${RESET}`,
+    `${BOLD}${BRIGHT_RED}THE ARBITER${RESET}`,
+    `${BOLD}${BRIGHT_RED}OF THAT WHICH WAS,${RESET}`,
+    `${BOLD}${BRIGHT_RED}THAT WHICH IS,${RESET}`,
+    `${BOLD}${BRIGHT_RED}AND THAT WHICH SHALL COME TO BE${RESET}`,
     '',
-    `${BOLD}${BRIGHT_RED}       THE ARBITER${RESET}`,
-    '',
-    `${CYAN}     Press Enter to continue...${RESET}`,
-  ]);
+    `${CYAN}Press Enter to continue...${RESET}`,
+  ], dialogueBoxWidthTiles);
 
   // Wait for Enter
   await waitForEnter();
