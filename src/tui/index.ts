@@ -530,6 +530,16 @@ export function createTUI(state: AppState, selectedCharacter?: number): TUI {
           case 'system':
             logbook.addSystemEvent(entry.text, entry.details);
             break;
+          case 'sdk':
+            // Raw SDK message - log with agent and session info
+            logbook.addSdkMessage(
+              entry.agent || 'arbiter',
+              entry.messageType || 'unknown',
+              entry.text,
+              entry.sessionId,
+              entry.details
+            );
+            break;
         }
       },
     };

@@ -10,11 +10,13 @@ import * as os from 'os';
  */
 export interface LogEntry {
   timestamp: Date;
-  type: 'message' | 'tool' | 'context' | 'mode' | 'system';
+  type: 'message' | 'tool' | 'context' | 'mode' | 'system' | 'sdk';
   speaker?: string;  // human, arbiter, Conjuring I, etc.
   text: string;
   details?: any;  // extra data for debug mode
   filtered?: boolean;  // True if this was filtered from main chat view
+  agent?: 'arbiter' | 'orchestrator';  // Which SDK agent this came from
+  sessionId?: string;  // SDK session ID
 }
 
 /**
@@ -119,6 +121,10 @@ export class Logbook {
       case 'system':
         const detailsStr = entry.details ? ` ${JSON.stringify(entry.details)}` : '';
         return `${ts} [System] ${entry.text}${detailsStr}`;
+      case 'sdk':
+        const agentLabel = entry.agent ? `[${entry.agent.toUpperCase()}]` : '[SDK]';
+        const sessionLabel = entry.sessionId ? ` (${entry.sessionId.substring(0, 8)}...)` : '';
+        return `${ts} ${agentLabel}${sessionLabel} ${entry.text}`;
       default:
         return `${ts} ${entry.text}`;
     }
@@ -230,6 +236,33 @@ export class Logbook {
       timestamp: new Date(),
       type: 'system',
       text: event,
+      details,
+    };
+    this.entries.push(entry);
+    this.writeToFile(entry);
+  }
+
+  /**
+   * Adds a raw SDK message entry to the log
+   * @param agent - Which agent this came from ('arbiter' or 'orchestrator')
+   * @param messageType - The SDK message type (system, assistant, user, result)
+   * @param content - Formatted string representation of the message
+   * @param sessionId - Optional session ID
+   * @param details - Optional full message details for deep inspection
+   */
+  addSdkMessage(
+    agent: 'arbiter' | 'orchestrator',
+    messageType: string,
+    content: string,
+    sessionId?: string,
+    details?: any
+  ): void {
+    const entry: LogEntry = {
+      timestamp: new Date(),
+      type: 'sdk',
+      agent,
+      sessionId,
+      text: `[${messageType}] ${content}`,
       details,
     };
     this.entries.push(entry);

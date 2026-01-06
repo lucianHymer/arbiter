@@ -38,11 +38,14 @@ import {
  * Log entry types for debug logging
  */
 export type DebugLogEntry = {
-  type: 'message' | 'tool' | 'system';
+  type: 'message' | 'tool' | 'system' | 'sdk';
   speaker?: string;  // For messages: 'human', 'arbiter', 'Orchestrator I', etc.
   text: string;
   filtered?: boolean;  // True if this was filtered from main chat
   details?: any;
+  agent?: 'arbiter' | 'orchestrator';  // For SDK messages
+  sessionId?: string;  // SDK session ID
+  messageType?: string;  // SDK message type (system, assistant, user, result)
 };
 
 /**
@@ -79,6 +82,92 @@ export type RouterCallbacks = {
 
 // Maximum context window size (200K tokens)
 const MAX_CONTEXT_TOKENS = 200000;
+
+/**
+ * Formats an SDK message for debug logging
+ * Returns a human-readable string representation of the message
+ */
+function formatSdkMessage(message: SDKMessage): string {
+  switch (message.type) {
+    case 'system': {
+      const sysMsg = message as SDKSystemMessage;
+      if (sysMsg.subtype === 'init') {
+        return `session_id=${sysMsg.session_id}`;
+      }
+      return `subtype=${sysMsg.subtype}`;
+    }
+
+    case 'assistant': {
+      const assistantMsg = message as SDKAssistantMessage;
+      const content = assistantMsg.message.content;
+      const parts: string[] = [];
+
+      if (typeof content === 'string') {
+        parts.push(`text: "${truncate(content, 100)}"`);
+      } else if (Array.isArray(content)) {
+        for (const block of content) {
+          if (block.type === 'text') {
+            const textBlock = block as { type: 'text'; text: string };
+            parts.push(`text: "${truncate(textBlock.text, 100)}"`);
+          } else if (block.type === 'tool_use') {
+            const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: any };
+            const inputStr = JSON.stringify(toolBlock.input);
+            parts.push(`tool_use: ${toolBlock.name}(${truncate(inputStr, 80)})`);
+          } else if (block.type === 'tool_result') {
+            const resultBlock = block as { type: 'tool_result'; tool_use_id: string; content: any };
+            const contentStr = typeof resultBlock.content === 'string'
+              ? resultBlock.content
+              : JSON.stringify(resultBlock.content);
+            parts.push(`tool_result: ${truncate(contentStr, 80)}`);
+          } else {
+            parts.push(`${block.type}: ...`);
+          }
+        }
+      }
+
+      return parts.join(' | ') || '(empty)';
+    }
+
+    case 'user': {
+      const userMsg = message as any;
+      const content = userMsg.message?.content;
+      if (typeof content === 'string') {
+        return `"${truncate(content, 100)}"`;
+      } else if (Array.isArray(content)) {
+        const types = content.map((b: any) => b.type).join(', ');
+        return `[${types}]`;
+      }
+      return '(user message)';
+    }
+
+    case 'result': {
+      const resultMsg = message as SDKResultMessage;
+      if (resultMsg.subtype === 'success') {
+        const usage = resultMsg.usage;
+        const total = (usage.input_tokens || 0) +
+          (usage.cache_read_input_tokens || 0) +
+          (usage.cache_creation_input_tokens || 0);
+        const pct = ((total / MAX_CONTEXT_TOKENS) * 100).toFixed(1);
+        return `success - tokens: ${total} (${pct}% context)`;
+      } else {
+        return `${resultMsg.subtype}`;
+      }
+    }
+
+    default:
+      return `(${message.type})`;
+  }
+}
+
+/**
+ * Truncates a string to a maximum length, adding ellipsis if needed
+ */
+function truncate(str: string, maxLength: number): string {
+  // Remove newlines for cleaner display
+  const clean = str.replace(/\n/g, '\\n');
+  if (clean.length <= maxLength) return clean;
+  return clean.substring(0, maxLength - 3) + '...';
+}
 
 /**
  * Router class - Core component managing sessions and routing messages
@@ -530,6 +619,16 @@ export class Router {
    * Handle a single message from the Arbiter
    */
   private async handleArbiterMessage(message: SDKMessage): Promise<void> {
+    // Log ALL raw SDK messages for debug
+    this.callbacks.onDebugLog?.({
+      type: 'sdk',
+      agent: 'arbiter',
+      messageType: message.type,
+      sessionId: this.state.arbiterSessionId ?? undefined,
+      text: formatSdkMessage(message),
+      details: message,
+    });
+
     switch (message.type) {
       case "system":
         if ((message as SDKSystemMessage).subtype === "init") {
@@ -541,6 +640,10 @@ export class Router {
       case "assistant":
         // Extract text content from the assistant message
         const assistantMessage = message as SDKAssistantMessage;
+
+        // Track tool use from Arbiter (MCP tools like spawn_orchestrator)
+        this.trackToolUseFromAssistant(assistantMessage, 'arbiter');
+
         const textContent = this.extractTextFromAssistantMessage(
           assistantMessage
         );
@@ -599,6 +702,17 @@ export class Router {
    * Handle a single message from an Orchestrator
    */
   private async handleOrchestratorMessage(message: SDKMessage): Promise<void> {
+    // Log ALL raw SDK messages for debug
+    const orchSessionId = this.state.currentOrchestrator?.sessionId;
+    this.callbacks.onDebugLog?.({
+      type: 'sdk',
+      agent: 'orchestrator',
+      messageType: message.type,
+      sessionId: orchSessionId ?? undefined,
+      text: formatSdkMessage(message),
+      details: message,
+    });
+
     switch (message.type) {
       case "system":
         if ((message as SDKSystemMessage).subtype === "init") {
@@ -673,5 +787,33 @@ export class Router {
     }
 
     return null;
+  }
+
+  /**
+   * Track tool_use blocks from an assistant message
+   * Used for both Arbiter and Orchestrator tool tracking
+   */
+  private trackToolUseFromAssistant(
+    message: SDKAssistantMessage,
+    agent: 'arbiter' | 'orchestrator'
+  ): void {
+    const content = message.message.content;
+    if (!Array.isArray(content)) return;
+
+    for (const block of content) {
+      if (block.type === 'tool_use') {
+        const toolBlock = block as { type: 'tool_use'; id: string; name: string; input: any };
+        const toolName = toolBlock.name;
+
+        // Log tool use for this agent
+        const speaker = agent === 'arbiter' ? 'Arbiter' : `Conjuring ${toRoman(this.state.currentOrchestrator?.number ?? 1)}`;
+        this.callbacks.onDebugLog?.({
+          type: 'tool',
+          speaker,
+          text: `[Tool] ${toolName}`,
+          details: { tool: toolName, input: toolBlock.input },
+        });
+      }
+    }
   }
 }
