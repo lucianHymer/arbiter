@@ -38,16 +38,16 @@ const CHARACTER_TILES = [
   TILE.HUMAN_8,
 ];
 
-// Creative wizard names for each character
-const WIZARD_NAMES = [
-  'Wizard of Fire',
-  'Wizard of Ice',
-  'Wizard of Earth',
-  'Wizard of Wind',
-  'Wizard of Light',
-  'Wizard of Shadow',
-  'Wizard of Storm',
-  'Wizard of Stars',
+// Character names for each sprite
+const CHARACTER_NAMES = [
+  'Adventurer',
+  'Rogue',
+  'Ranger',
+  'Swordsman',
+  'Dwarf',
+  'Knight',
+  'Shadow',
+  'Wizard',
 ];
 
 // Layout constants
@@ -67,20 +67,24 @@ const CYAN = '\x1b[36m';
 /**
  * Render all character tiles as an array of ANSI strings (one per row).
  * Characters are displayed in a horizontal row with the selected one highlighted.
+ * Character tiles are rendered with transparency preserved (no background compositing).
  */
 function renderCharacterRow(
   tileset: Tileset,
   selectedIndex: number
 ): string[] {
-  // Extract grass and focus tiles
-  const grassTile = extractTile(tileset, TILE.GRASS);
+  // Extract focus tile
   const focusTile = extractTile(tileset, TILE.FOCUS);
+
+  // Extract grass tile for background
+  const grassTile = extractTile(tileset, TILE.GRASS);
 
   // Extract and render each character tile
   const renderedTiles: string[][] = [];
   for (let i = 0; i < CHARACTER_TILES.length; i++) {
     let charPixels = extractTile(tileset, CHARACTER_TILES[i]);
-    // Composite character on grass background (tiles >= 80 need grass background)
+
+    // Composite character on grass background
     charPixels = compositeTiles(charPixels, grassTile, 1);
 
     // Apply focus overlay to selected character
@@ -217,14 +221,14 @@ export async function showCharacterSelect(): Promise<number> {
       term.moveTo(startX, indicatorY);
       process.stdout.write(renderIndicatorRow(selectedIndex));
 
-      // Wizard name (centered)
+      // Character name (centered)
       const nameY = indicatorY + 1;
-      const wizardName = WIZARD_NAMES[selectedIndex];
+      const characterName = CHARACTER_NAMES[selectedIndex];
       // Clear the line first to remove previous name
       term.moveTo(1, nameY);
       process.stdout.write(' '.repeat(width));
-      term.moveTo(Math.max(1, Math.floor((width - wizardName.length) / 2)), nameY);
-      process.stdout.write(`${BOLD}${CYAN}${wizardName}${RESET}`);
+      term.moveTo(Math.max(1, Math.floor((width - characterName.length) / 2)), nameY);
+      process.stdout.write(`${BOLD}${CYAN}${characterName}${RESET}`);
 
       // Instructions at bottom
       const instructionY = nameY + 2;

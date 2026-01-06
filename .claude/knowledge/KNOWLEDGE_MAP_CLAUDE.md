@@ -7,6 +7,7 @@ Quick reference for Claude to load relevant knowledge.
 @architecture/tui-integration.md
 @architecture/hierarchical-orchestration.md
 @architecture/router-design.md
+@architecture/logging-architecture.md
 
 ## TUI
 
@@ -15,3 +16,4 @@ Quick reference for Claude to load relevant knowledge.
 ## Gotchas
 
 @gotchas/arbiter-echo-bug.md
+@gotchas/ink-ansi-clearing.md

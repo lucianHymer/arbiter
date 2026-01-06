@@ -69,7 +69,7 @@ const SIGN_Y = 1;
 // Types
 // ============================================================================
 
-type Phase = 'walking' | 'at_sign' | 'continue_to_exit' | 'dead';
+type Phase = 'walking' | 'dead';
 
 /**
  * State for minimal redraws
@@ -88,6 +88,7 @@ interface ChangeTracker {
   lastPlayerX: number;
   lastPlayerY: number;
   lastPhase: Phase;
+  lastShowMessage: boolean;
 }
 
 // ============================================================================
@@ -148,10 +149,8 @@ function createCollisionMap(): number[][] {
         if (col === 0 || col === 6) tileType = TILE_TYPE.BLOCKED;
       }
 
-      // Exit point at right edge of path (row 2, col 6)
-      if (row === 2 && col === 6) {
-        tileType = TILE_TYPE.EXIT;
-      }
+      // No exit tiles - player must walk off screen to right
+      // (formerly: Exit point at right edge of path (row 2, col 6))
 
       mapRow.push(tileType);
     }
@@ -183,13 +182,12 @@ function isOffScreen(x: number, y: number): boolean {
 }
 
 /**
- * Check if position is the exit
+ * Check if position is the exit (no longer used - exit is now off-screen)
  */
 function isExit(x: number, y: number): boolean {
-  if (x < 0 || y < 0 || x >= SCENE_WIDTH_TILES || y >= SCENE_HEIGHT_TILES) {
-    return false;
-  }
-  return COLLISION_MAP[y][x] === TILE_TYPE.EXIT;
+  // Exit is now when player walks off-screen to the right on path row
+  // This function kept for compatibility but always returns false
+  return false;
 }
 
 /**
@@ -307,6 +305,47 @@ function createForestScene(characterTile: number, playerX: number, playerY: numb
 }
 
 /**
+ * Get the background tile index at a position (what the scene would have without the player)
+ */
+function getBackgroundTileAt(row: number, col: number): number {
+  let tile: number = TILE.GRASS;
+
+  // Left edge trees (except path row)
+  if (col === 0 && row !== 2) {
+    tile = TILE.PINE_TREE;
+  }
+
+  // Right edge trees (except path row)
+  if (col === 6 && row !== 2) {
+    tile = TILE.PINE_TREE;
+  }
+
+  // Top row: mix of trees
+  if (row === 0) {
+    if (col === 0 || col === 1 || col === 5 || col === 6) tile = TILE.PINE_TREE;
+    if (col === 2 || col === 4) tile = TILE.BARE_TREE;
+  }
+
+  // Bottom row: mix of trees
+  if (row === 4) {
+    if (col === 0 || col === 6) tile = TILE.PINE_TREE;
+    if (col === 1 || col === 5) tile = TILE.BARE_TREE;
+  }
+
+  // Add signpost near right edge, above path
+  if (row === 1 && col === 5) {
+    tile = 63; // Signpost tile
+  }
+
+  // Middle path row (row 2) - sparse grass for path ALL THE WAY THROUGH
+  if (row === 2) {
+    tile = TILE.GRASS_SPARSE;
+  }
+
+  return tile;
+}
+
+/**
  * Render the forest scene to an array of ANSI strings (one per row)
  */
 function renderForestScene(
@@ -328,9 +367,18 @@ function renderForestScene(
       const tileIndex = scene[row][col];
       let pixels = extractTile(tileset, tileIndex);
 
-      // Composite characters/objects on grass background
+      // Composite characters/objects on appropriate background
       if (tileIndex >= 80) {
-        pixels = compositeTiles(pixels, trailTile, 1);
+        // Check if this is the player character position
+        if (row === playerY && col === playerX) {
+          // Get the actual background tile at this position
+          const bgTileIndex = getBackgroundTileAt(row, col);
+          const bgTile = extractTile(tileset, bgTileIndex);
+          pixels = compositeTiles(pixels, bgTile, 1);
+        } else {
+          // Other objects (like signpost) use sparse grass
+          pixels = compositeTiles(pixels, trailTile, 1);
+        }
       }
 
       renderedRow.push(renderTile(pixels));
@@ -447,8 +495,6 @@ function renderDialogueBox(tileset: Tileset): string[] {
     `${WHITE}OF THAT WHICH ${COLOR_WAS}WAS${WHITE},`,
     `${WHITE}THAT WHICH ${COLOR_IS}IS${WHITE},`,
     `${WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
-    '',
-    `${WHITE}Press Enter to continue...`,
   ];
 
   // Center text in the dialogue box
@@ -556,6 +602,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       lastPlayerX: -1,
       lastPlayerY: -1,
       lastPhase: 'walking',
+      lastShowMessage: false,
     };
 
     // Calculate centering offsets
@@ -575,17 +622,35 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
      * Draw the forest scene (only if changed)
      */
     function drawScene() {
+      const showMessage = isNextToSign(state.playerX, state.playerY);
+
+      // Track if player has seen the sign
+      if (showMessage) {
+        state.hasSeenSign = true;
+      }
+
+      // Check if anything changed
       if (
         state.playerX === tracker.lastPlayerX &&
         state.playerY === tracker.lastPlayerY &&
-        state.phase === tracker.lastPhase
+        state.phase === tracker.lastPhase &&
+        showMessage === tracker.lastShowMessage
       ) {
         return;
       }
 
+      // Check if message visibility changed - need to clear if it was showing
+      const needsClear = tracker.lastShowMessage && !showMessage;
+
       tracker.lastPlayerX = state.playerX;
       tracker.lastPlayerY = state.playerY;
       tracker.lastPhase = state.phase;
+      tracker.lastShowMessage = showMessage;
+
+      // Clear screen if message box needs to disappear
+      if (needsClear) {
+        term.clear();
+      }
 
       const sceneLines = renderForestScene(tileset, selectedCharacter, state.playerX, state.playerY);
 
@@ -595,15 +660,15 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         process.stdout.write(sceneLines[i] + RESET);
       }
 
-      // Show dialogue box overlay if at sign
-      if (state.phase === 'at_sign') {
+      // Show dialogue box at bottom of scene if next to sign
+      if (showMessage) {
         const dialogueLines = renderDialogueBox(tileset);
-        // Center dialogue box: 5 tiles = 80 chars, scene = 112 chars
+        // Center dialogue box horizontally: 5 tiles = 80 chars, scene = 112 chars
         // (112 - 80) / 2 = 16 chars offset from scene start
         const dialogueOffsetX = sceneOffsetX + Math.floor((SCENE_WIDTH_CHARS - 80) / 2);
-        // Overlay on scene (vertical center)
-        const dialogueOffsetY =
-          sceneOffsetY + Math.floor((SCENE_HEIGHT_CHARS - dialogueLines.length) / 2);
+        // Position dialogue to cover bottom 3 tile rows of scene
+        // 3 tiles * 8 rows/tile = 24 rows, so start at: sceneHeight - 24
+        const dialogueOffsetY = sceneOffsetY + (SCENE_HEIGHT_CHARS - 16);
 
         for (let i = 0; i < dialogueLines.length; i++) {
           term.moveTo(dialogueOffsetX, dialogueOffsetY + i);
@@ -690,19 +755,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         return;
       }
 
-      // At sign - Enter to continue
-      if (state.phase === 'at_sign' && key === 'ENTER') {
-        state.phase = 'continue_to_exit';
-        state.hasSeenSign = true;
-        // Force full redraw to remove dialogue box
-        tracker.lastPhase = 'walking';
-        term.clear();
-        drawScene();
-        return;
-      }
-
-      // Walking phases - handle arrow key movement
-      if (state.phase === 'walking' || state.phase === 'continue_to_exit') {
+      // Walking phase - handle arrow key movement
+      if (state.phase === 'walking') {
         let newX = state.playerX;
         let newY = state.playerY;
 
@@ -718,13 +772,9 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
         // Check if trying to move off screen
         if (isOffScreen(newX, newY)) {
-          // Check if this is the valid exit (right side on path row, after seeing sign)
-          if (
-            newX >= SCENE_WIDTH_TILES &&
-            newY === START_Y &&
-            state.phase === 'continue_to_exit'
-          ) {
-            // Successfully exited!
+          // Check if this is the valid exit: moving right off screen on path row after seeing sign
+          if (newX >= SCENE_WIDTH_TILES && newY === START_Y && state.hasSeenSign) {
+            // Successfully exited by walking off the right edge on the path!
             cleanup();
             resolve('success');
             return;
@@ -744,18 +794,6 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         // Valid move - update position
         state.playerX = newX;
         state.playerY = newY;
-
-        // Check if next to sign and haven't seen it yet
-        if (state.phase === 'walking' && !state.hasSeenSign && isNextToSign(newX, newY)) {
-          state.phase = 'at_sign';
-        }
-
-        // Check if reached exit after seeing sign
-        if (state.phase === 'continue_to_exit' && isExit(newX, newY)) {
-          cleanup();
-          resolve('success');
-          return;
-        }
 
         drawScene();
       }

@@ -25,6 +25,41 @@ The TUI is the primary integration point between the Router and user input. Buil
 - Callbacks are fire-and-forget - no return values
 - Callbacks update React state via the TUI bridge
 
+## TUI Bridge Pattern
+
+The Ink TUI uses a bridge pattern to connect React's declarative state with the Router's imperative callbacks:
+
+### TUIBridge Object (module-scoped)
+
+- `inputCallback` - User's input handler from `onInput()`
+- `routerCallbacks` - React's RouterCallbacks from inside App
+- `actions` - TUIActions from useAppState hook
+- `waitingFor` - Current waiting state
+
+### createTUI() Returns
+
+- `start()` - Renders Ink app with fullscreen-ink
+- `stop()` - Unmounts Ink instance
+- `getRouterCallbacks()` - Returns proxy callbacks that forward to React
+- `onInput(cb)` - Stores callback for input submission
+- `startWaiting/stopWaiting` - Updates bridge state + calls React
+
+### App Props
+
+- `initialState` - AppState from Router
+- `selectedCharacter` - Tile index
+- `onInputSubmit` - Callback to forward input to bridge
+- `onAppReady` - Called on mount with callbacks and actions
+- `getWaitingState` - Function to poll external waiting state
+
+### Flow
+
+1. App mounts → calls `onAppReady(routerCallbacks, actions)`
+2. Bridge stores callbacks/actions
+3. Router calls `getRouterCallbacks()` → gets proxy object
+4. Proxy forwards to stored React callbacks
+5. React callbacks update state → triggers re-render
+
 ## Ink Integration
 
 - React-based TUI with flexbox layout
@@ -47,3 +82,5 @@ The TUI is the primary integration point between the Router and user input. Buil
 - src/tui/App.tsx
 - src/tui/components/
 - src/tui/hooks/
+- src/tui/hooks/useAppState.ts
+- src/tui/hooks/useRouterCallbacks.ts
