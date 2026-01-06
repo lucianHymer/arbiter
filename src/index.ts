@@ -3,9 +3,7 @@
 
 import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
-import { createTUI, TUI } from './tui/index.js';
-import { showCharacterSelect } from './tui/screens/character-select.js';
-import { showForestIntro } from './tui/screens/forest-intro.js';
+import { createTUI, TUI, showCharacterSelect, showForestIntro } from './tui/index.js';
 
 /**
  * Session information for persistence on exit
@@ -82,10 +80,15 @@ async function main(): Promise<void> {
 
   try {
     // Show character selection screen first
-    const selectedCharacter = await showCharacterSelect();
+    let selectedCharacter = await showCharacterSelect();
 
     // Show animated forest intro with selected character
-    await showForestIntro(selectedCharacter);
+    // If player dies, go back to character select
+    let result = await showForestIntro(selectedCharacter);
+    while (result === 'death') {
+      selectedCharacter = await showCharacterSelect();
+      result = await showForestIntro(selectedCharacter);
+    }
 
     // Create initial application state
     state = createInitialState();

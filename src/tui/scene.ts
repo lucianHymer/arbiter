@@ -34,6 +34,7 @@ export interface SceneState {
   workingTarget: 'arbiter' | 'conjuring' | null; // Who is currently processing
   hopFrame: boolean; // Alternates true/false for hop animation
   bubbleFrame: boolean; // Alternates for bubble visibility
+  humanCol: number; // Human character column position (0-6, default 1)
 }
 
 /**
@@ -128,6 +129,7 @@ export function createInitialSceneState(): SceneState {
     workingTarget: null,
     hopFrame: false,
     bubbleFrame: false,
+    humanCol: 1, // Default position (after entry animation)
   };
 }
 
@@ -148,9 +150,10 @@ export function createInitialSceneState(): SceneState {
  * - Spellbook appears to the left of arbiter when at position 2
  */
 export function createScene(state: SceneState): TileSpec[][] {
-  const { arbiterPos, demonCount, selectedCharacter, workingTarget, bubbleFrame } = state;
+  const { arbiterPos, demonCount, selectedCharacter, workingTarget, bubbleFrame, humanCol } = state;
   const arbiterCol = 2 + arbiterPos;
-  const arbiterRow = 2;
+  // When arbiter is at position 2 (near spellbook), move down one row (next to campfire)
+  const arbiterRow = arbiterPos === 2 ? 3 : 2;
 
   const scene: TileSpec[][] = [];
 
@@ -174,14 +177,14 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = TILE.PINE_TREE;
       }
 
-      // Human emerging from forest (row 2, col 1)
-      if (row === 2 && col === 1) {
+      // Human character on row 2 at humanCol position
+      if (row === 2 && col === humanCol && humanCol >= 0 && humanCol < SCENE_WIDTH) {
         tile = selectedCharacter;
       }
 
       // Spellbook appears below the arbiter when at position 2 (col 4)
-      // Arbiter is at row 2, col 4; spellbook at row 3, col 4 (directly below)
-      if (arbiterPos === 2 && row === 3 && col === 4) {
+      // Arbiter is at row 3 when position 2; spellbook at row 4, col 4 (directly below)
+      if (arbiterPos === 2 && row === 4 && col === 4) {
         tile = TILE.SPELLBOOK;
       }
 
@@ -290,9 +293,10 @@ export function renderScene(
   // When hopping, we need to shift the hopping tile up by 1 row
   // This means: at the row above, we show the bottom row of the hopping tile
   // and at the tile's normal position, we show rows shifted up
-  let output = '';
+  const lines: string[] = [];
   for (let tileRow = 0; tileRow < scene.length; tileRow++) {
     for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+      let line = '';
       for (let tileCol = 0; tileCol < scene[tileRow].length; tileCol++) {
         const isHoppingTile = hopTilePos && hopTilePos.row === tileRow && hopTilePos.col === tileCol;
         const isTileAboveHopping = hopTilePos && hopTilePos.row === tileRow + 1 && hopTilePos.col === tileCol;
@@ -303,28 +307,29 @@ export function renderScene(
           // Otherwise show charRow - 1 if we're hopping, but we need to handle the overlap
           if (charRow === 0) {
             // First char row of hopping tile shows second row of the tile
-            output += renderedTiles[tileRow][tileCol][1];
+            line += renderedTiles[tileRow][tileCol][1];
           } else if (charRow === CHAR_HEIGHT - 1) {
             // Last char row shows grass (the tile has moved up)
-            output += renderedTiles[tileRow][tileCol][charRow]; // Actually show grass from tile
+            line += renderedTiles[tileRow][tileCol][charRow]; // Actually show grass from tile
           } else {
             // Show the next row down (shifted up by 1)
-            output += renderedTiles[tileRow][tileCol][charRow + 1];
+            line += renderedTiles[tileRow][tileCol][charRow + 1];
           }
         } else if (isTileAboveHopping) {
           // For the tile above the hopping tile, the last row shows the first row of the hopping tile
           if (charRow === CHAR_HEIGHT - 1) {
-            output += renderedTiles[tileRow + 1][tileCol][0];
+            line += renderedTiles[tileRow + 1][tileCol][0];
           } else {
-            output += renderedTiles[tileRow][tileCol][charRow];
+            line += renderedTiles[tileRow][tileCol][charRow];
           }
         } else {
-          output += renderedTiles[tileRow][tileCol][charRow];
+          line += renderedTiles[tileRow][tileCol][charRow];
         }
       }
-      output += '\n';
+      lines.push(line);
     }
   }
 
-  return output;
+  // Join with newlines (no trailing newline to prevent extra line causing flicker)
+  return lines.join('\n');
 }
