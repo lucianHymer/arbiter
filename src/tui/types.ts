@@ -5,7 +5,7 @@
 /**
  * Speaker types for chat messages
  */
-export type Speaker = 'human' | 'arbiter' | 'orchestrator';
+export type Speaker = 'human' | 'arbiter' | 'orchestrator' | 'system';
 
 /**
  * Chat message interface

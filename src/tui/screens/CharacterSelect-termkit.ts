@@ -114,27 +114,6 @@ function renderCharacterRow(
 }
 
 /**
- * Render the selection indicator row (arrows below selected character).
- */
-function renderIndicatorRow(selectedIndex: number): string {
-  const parts: string[] = [];
-
-  for (let i = 0; i < CHARACTER_TILES.length; i++) {
-    if (i === selectedIndex) {
-      // Highlighted arrow indicator (centered under tile)
-      parts.push(`${BOLD}${YELLOW}      ^^^       ${RESET}`);
-    } else {
-      parts.push(' '.repeat(TILE_DISPLAY_WIDTH));
-    }
-    if (i < CHARACTER_TILES.length - 1) {
-      parts.push(' '.repeat(TILE_SPACING));
-    }
-  }
-
-  return parts.join('');
-}
-
-/**
  * Calculate the total width of the character row in characters.
  */
 function getRowWidth(): number {
@@ -197,7 +176,7 @@ export async function showCharacterSelect(): Promise<number> {
 
       // Title lines
       const title1 = 'Your journey to the Arbiter begins.';
-      const title2 = 'Choose wisely—the forest does not forgive those who stray.';
+      const title2 = 'Choose wisely. The forest does not forgive those who stray.';
 
       // Title 1 (yellow)
       term.moveTo(Math.max(1, Math.floor((width - title1.length) / 2)), startY);
@@ -216,13 +195,8 @@ export async function showCharacterSelect(): Promise<number> {
         process.stdout.write(characterLines[i] + RESET);
       }
 
-      // Selection indicator
-      const indicatorY = tilesStartY + CHAR_HEIGHT;
-      term.moveTo(startX, indicatorY);
-      process.stdout.write(renderIndicatorRow(selectedIndex));
-
-      // Character name (centered)
-      const nameY = indicatorY + 1;
+      // Character name (centered below tiles, with padding)
+      const nameY = tilesStartY + CHAR_HEIGHT + 2;
       const characterName = CHARACTER_NAMES[selectedIndex];
       // Clear the line first to remove previous name
       term.moveTo(1, nameY);

@@ -113,6 +113,7 @@ const COLORS = {
   human: '\x1b[32m', // green
   arbiter: '\x1b[33m', // yellow
   orchestrator: '\x1b[36m', // cyan
+  system: '\x1b[2;3m', // dim + italic for narrator/system messages
   reset: '\x1b[0m',
   dim: '\x1b[2m',
   bold: '\x1b[1m',
@@ -432,6 +433,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       return 'Arbiter: ';
     } else if (msg.speaker === 'orchestrator' && msg.orchestratorNumber) {
       return `Conjuring ${toRoman(msg.orchestratorNumber)}: `;
+    } else if (msg.speaker === 'system') {
+      return ''; // No prefix for system/narrator messages
     }
     return '';
   }
@@ -444,6 +447,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         return COLORS.arbiter;
       case 'orchestrator':
         return COLORS.orchestrator;
+      case 'system':
+        return COLORS.system;
       default:
         return COLORS.reset;
     }
@@ -695,6 +700,15 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       console.error('Failed to load tileset:', err);
       throw err;
     }
+
+    // Add intro message - a narrator message that sets the scene
+    // This is NOT sent to the agent, just displayed for the user
+    state.messages.push({
+      id: 'intro-message',
+      speaker: 'system',
+      text: 'You stand before the Arbiter. Speak your query, and ancient wisdom shall answer.',
+      timestamp: new Date(),
+    });
 
     // Enter fullscreen mode
     term.fullscreen(true);
