@@ -113,6 +113,9 @@ const SCENE_HEIGHT = 6;
 const TILE_AREA_WIDTH = SCENE_WIDTH * TILE_SIZE; // 112 chars
 const TILE_AREA_HEIGHT = SCENE_HEIGHT * CHAR_HEIGHT; // 48 rows
 
+// Filler tile cache (for grass/trees above and below scene)
+let fillerRowCache: Map<string, string[]> = new Map();
+
 // Animation
 const ANIMATION_INTERVAL = 250; // ms
 
@@ -148,9 +151,11 @@ function getLayout() {
     height = term.height;
   }
 
-  // Left side: tile scene
+  // Left side: tile scene - vertically centered
   const tileAreaX = 1;
-  const tileAreaY = 1;
+  const tileAreaY = Math.max(1, Math.floor((height - TILE_AREA_HEIGHT) / 2));
+  const fillerRowsAbove = tileAreaY - 1;
+  const fillerRowsBelow = Math.max(0, height - (tileAreaY + TILE_AREA_HEIGHT));
 
   // Right side: chat, status, input
   const chatAreaX = TILE_AREA_WIDTH + 3; // Leave 1 col gap
@@ -169,6 +174,8 @@ function getLayout() {
       y: tileAreaY,
       width: TILE_AREA_WIDTH,
       height: TILE_AREA_HEIGHT,
+      fillerRowsAbove,
+      fillerRowsBelow,
     },
     chatArea: {
       x: chatAreaX,
@@ -245,6 +252,50 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   // ============================================================================
 
   /**
+   * Get or create a cached filler row (grass with occasional trees)
+   */
+  function getFillerRow(tileset: Tileset, rowIndex: number): string[] {
+    const cacheKey = `filler-${rowIndex}`;
+    if (fillerRowCache.has(cacheKey)) {
+      return fillerRowCache.get(cacheKey)!;
+    }
+
+    const grassPixels = extractTile(tileset, TILE.GRASS);
+    const rowLines: string[] = [];
+
+    // Build one row of tiles (SCENE_WIDTH tiles wide)
+    for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+      let line = '';
+      for (let col = 0; col < SCENE_WIDTH; col++) {
+        // Deterministic pattern for variety: mostly grass, some trees
+        const pattern = (rowIndex * 7 + col * 13) % 20;
+        let tileIndex: number;
+        if (pattern < 2) {
+          tileIndex = TILE.PINE_TREE;
+        } else if (pattern < 4) {
+          tileIndex = TILE.BARE_TREE;
+        } else if (pattern < 7) {
+          tileIndex = TILE.GRASS_SPARSE;
+        } else {
+          tileIndex = TILE.GRASS;
+        }
+
+        // Extract and render tile
+        let pixels = extractTile(tileset, tileIndex);
+        if (tileIndex >= 80) {
+          pixels = compositeTiles(pixels, grassPixels, 1);
+        }
+        const rendered = renderTile(pixels);
+        line += rendered[charRow];
+      }
+      rowLines.push(line);
+    }
+
+    fillerRowCache.set(cacheKey, rowLines);
+    return rowLines;
+  }
+
+  /**
    * Draw tile scene
    * @param force Force redraw even if animation frame unchanged
    */
@@ -257,6 +308,23 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (!state.tileset) return;
     const layout = getLayout();
+
+    // Draw filler rows above the scene (build from scene upward, so cut-off is at top edge)
+    const rowsAbove = layout.tileArea.fillerRowsAbove;
+    if (rowsAbove > 0) {
+      const fillerTileRowsAbove = Math.ceil(rowsAbove / CHAR_HEIGHT);
+      for (let tileRow = 0; tileRow < fillerTileRowsAbove; tileRow++) {
+        const fillerLines = getFillerRow(state.tileset, tileRow);
+        // Draw from bottom of this filler tile upward
+        for (let charRow = CHAR_HEIGHT - 1; charRow >= 0; charRow--) {
+          const screenY = layout.tileArea.y - 1 - (tileRow * CHAR_HEIGHT) - (CHAR_HEIGHT - 1 - charRow);
+          if (screenY >= 1) {
+            term.moveTo(layout.tileArea.x, screenY);
+            process.stdout.write(fillerLines[charRow] + RESET);
+          }
+        }
+      }
+    }
 
     // Create scene from state
     const scene = createScene(state.sceneState);
@@ -273,6 +341,22 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     for (let i = 0; i < lines.length; i++) {
       term.moveTo(layout.tileArea.x, layout.tileArea.y + i);
       process.stdout.write(lines[i] + RESET);
+    }
+
+    // Draw filler rows below the scene (build from scene downward, so cut-off is at bottom edge)
+    const rowsBelow = layout.tileArea.fillerRowsBelow;
+    if (rowsBelow > 0) {
+      const fillerTileRowsBelow = Math.ceil(rowsBelow / CHAR_HEIGHT);
+      for (let tileRow = 0; tileRow < fillerTileRowsBelow; tileRow++) {
+        const fillerLines = getFillerRow(state.tileset, tileRow + 100); // Offset for different pattern
+        for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + (tileRow * CHAR_HEIGHT) + charRow;
+          if (screenY <= layout.height) {
+            term.moveTo(layout.tileArea.x, screenY);
+            process.stdout.write(fillerLines[charRow] + RESET);
+          }
+        }
+      }
     }
   }
 
@@ -712,7 +796,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       // Footer - green like INSERT mode
       term.moveTo(1, term.height);
-      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  ^C:quit \x1b[0m');
+      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  <ctrl-c>:quit \x1b[0m');
     }
 
     drawLogViewer();
