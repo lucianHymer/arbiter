@@ -8,6 +8,7 @@ Quick reference for Claude to load relevant knowledge.
 @architecture/hierarchical-orchestration.md
 @architecture/router-design.md
 @architecture/logging-architecture.md
+@architecture/context-calculation.md
 
 ## TUI
 
