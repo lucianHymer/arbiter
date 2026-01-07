@@ -84,6 +84,42 @@ export type RouterCallbacks = {
 const MAX_CONTEXT_TOKENS = 200000;
 
 /**
+ * Context tracking state for a single session
+ * Tracks usage across messages using the formula:
+ * context = max(cache_read) + sum(input) + sum(output)
+ */
+interface ContextTracker {
+  seenMsgIds: Set<string>;  // Dedupe by message.id (NOT uuid)
+  maxCacheRead: number;
+  sumInput: number;
+  sumOutput: number;
+  sumCacheCreate: number;  // For auditing only - not in primary formula
+}
+
+function createContextTracker(): ContextTracker {
+  return {
+    seenMsgIds: new Set(),
+    maxCacheRead: 0,
+    sumInput: 0,
+    sumOutput: 0,
+    sumCacheCreate: 0,
+  };
+}
+
+function getContextTokens(tracker: ContextTracker): number {
+  return tracker.maxCacheRead + tracker.sumInput + tracker.sumOutput;
+}
+
+function getContextPercent(tracker: ContextTracker): number {
+  return (getContextTokens(tracker) / MAX_CONTEXT_TOKENS) * 100;
+}
+
+// For auditing - compare with secondary formula
+function getAuditContextTokens(tracker: ContextTracker): number {
+  return tracker.sumCacheCreate + tracker.sumInput + tracker.sumOutput;
+}
+
+/**
  * Formats an SDK message for debug logging
  * Returns a human-readable string representation of the message
  */
@@ -204,6 +240,10 @@ export class Router {
   // Store MCP server for Arbiter session resumption
   private arbiterMcpServer: any = null;
 
+  // Context tracking - separate tracker per session
+  private arbiterContextTracker = createContextTracker();
+  private orchestratorContextTracker: ContextTracker | null = null;
+
   constructor(state: AppState, callbacks: RouterCallbacks) {
     this.state = state;
     this.callbacks = callbacks;
@@ -283,6 +323,7 @@ export class Router {
           this.orchestratorAbortController = null;
         }
         this.orchestratorQuery = null;
+        this.orchestratorContextTracker = null;  // Clear context tracker
         clearCurrentOrchestrator(this.state);
 
         // Switch mode
@@ -353,25 +394,20 @@ export class Router {
     // Increment orchestrator count
     this.orchestratorCount = number;
 
+    // Create fresh context tracker for this orchestrator
+    this.orchestratorContextTracker = createContextTracker();
+
     // Create abort controller for this session
     this.orchestratorAbortController = new AbortController();
 
     // Generate unique ID for this orchestrator
     const orchId = `orch-${Date.now()}`;
 
-    // Track context percent for this session
-    let currentContextPercent = 0;
-
     // Create callbacks for hooks
     const orchestratorCallbacks: OrchestratorCallbacks = {
-      onContextUpdate: (_sessionId: string, percent: number) => {
-        // Context should never decrease - use the maximum
-        currentContextPercent = Math.max(percent, currentContextPercent);
-        updateOrchestratorContext(this.state, currentContextPercent);
-        this.callbacks.onContextUpdate(
-          this.state.arbiterContextPercent,
-          currentContextPercent
-        );
+      onContextUpdate: (_sessionId: string, _percent: number) => {
+        // Context is now tracked from assistant messages via updateContextFromAssistant
+        // This callback exists for hook compatibility but is no longer the source of truth
       },
       onToolUse: (tool: string) => {
         // Increment tool count
@@ -395,9 +431,13 @@ export class Router {
     };
 
     // Create hooks for context management
+    // The getContextPercent callback reads from our tracker for accurate context warnings
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
-      (_sessionId: string) => currentContextPercent
+      (_sessionId: string) =>
+        this.orchestratorContextTracker
+          ? getContextPercent(this.orchestratorContextTracker)
+          : 0
     );
 
     // Query options for the Orchestrator session
@@ -641,6 +681,13 @@ export class Router {
         // Extract text content from the assistant message
         const assistantMessage = message as SDKAssistantMessage;
 
+        // Track context from assistant messages (correct source)
+        this.updateContextFromAssistant(
+          assistantMessage,
+          this.arbiterContextTracker,
+          'arbiter'
+        );
+
         // Track tool use from Arbiter (MCP tools like spawn_orchestrator)
         this.trackToolUseFromAssistant(assistantMessage, 'arbiter');
 
@@ -653,45 +700,8 @@ export class Router {
         break;
 
       case "result":
-        // Update context percentage from usage data
-        const resultMessage = message as SDKResultMessage;
-        if (resultMessage.subtype === "success") {
-          const usage = resultMessage.usage;
-          const total =
-            (usage.input_tokens || 0) +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
-          const pct = (total / MAX_CONTEXT_TOKENS) * 100;
-
-          // Context should never decrease - use the maximum of current and new
-          const previousPct = this.state.arbiterContextPercent;
-          const finalPct = Math.max(pct, previousPct);
-          updateArbiterContext(this.state, finalPct);
-
-          // Log context calculation for debugging
-          this.callbacks.onDebugLog?.({
-            type: 'system',
-            agent: 'arbiter',
-            text: `Context: ${finalPct.toFixed(1)}% (was ${previousPct.toFixed(1)}%, calc ${pct.toFixed(1)}%)`,
-            details: {
-              calculation: {
-                input_tokens: usage.input_tokens || 0,
-                cache_read_input_tokens: usage.cache_read_input_tokens || 0,
-                cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-                total_tokens: total,
-                max_tokens: MAX_CONTEXT_TOKENS,
-                calculated_percent: pct,
-                previous_percent: previousPct,
-                final_percent: finalPct,
-              },
-              full_usage: usage,
-            },
-          });
-
-          // Notify callback
-          const orchPct = this.state.currentOrchestrator?.contextPercent ?? null;
-          this.callbacks.onContextUpdate(finalPct, orchPct);
-        }
+        // Result messages are logged for debugging but NOT used for context tracking
+        // Context is tracked from assistant messages (see updateContextFromAssistant)
         break;
     }
   }
@@ -747,6 +757,16 @@ export class Router {
       case "assistant":
         // Extract text content from the assistant message
         const assistantMessage = message as SDKAssistantMessage;
+
+        // Track context from assistant messages (correct source)
+        if (this.orchestratorContextTracker) {
+          this.updateContextFromAssistant(
+            assistantMessage,
+            this.orchestratorContextTracker,
+            'orchestrator'
+          );
+        }
+
         const textContent = this.extractTextFromAssistantMessage(
           assistantMessage
         );
@@ -756,48 +776,85 @@ export class Router {
         break;
 
       case "result":
-        // Update context percentage from usage data
-        const resultMessage = message as SDKResultMessage;
-        if (resultMessage.subtype === "success") {
-          const usage = resultMessage.usage;
-          const total =
-            (usage.input_tokens || 0) +
-            (usage.cache_read_input_tokens || 0) +
-            (usage.cache_creation_input_tokens || 0);
-          const pct = (total / MAX_CONTEXT_TOKENS) * 100;
-
-          if (this.state.currentOrchestrator) {
-            // Context should never decrease - use the maximum
-            const previousPct = this.state.currentOrchestrator.contextPercent;
-            const finalPct = Math.max(pct, previousPct);
-            updateOrchestratorContext(this.state, finalPct);
-
-            // Log context calculation for debugging
-            this.callbacks.onDebugLog?.({
-              type: 'system',
-              agent: 'orchestrator',
-              text: `Context: ${finalPct.toFixed(1)}% (was ${previousPct.toFixed(1)}%, calc ${pct.toFixed(1)}%)`,
-              details: {
-                calculation: {
-                  input_tokens: usage.input_tokens || 0,
-                  cache_read_input_tokens: usage.cache_read_input_tokens || 0,
-                  cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
-                  total_tokens: total,
-                  max_tokens: MAX_CONTEXT_TOKENS,
-                  calculated_percent: pct,
-                  final_percent: finalPct,
-                },
-                full_usage: usage,
-              },
-            });
-
-            this.callbacks.onContextUpdate(
-              this.state.arbiterContextPercent,
-              finalPct
-            );
-          }
-        }
+        // Result messages are logged for debugging but NOT used for context tracking
+        // Context is tracked from assistant messages (see updateContextFromAssistant)
         break;
+    }
+  }
+
+  /**
+   * Update context tracking from an assistant message
+   * Uses the formula: context = max(cache_read) + sum(input) + sum(output)
+   * Dedupes by message.id (NOT uuid - uuid is per streaming chunk)
+   */
+  private updateContextFromAssistant(
+    message: SDKAssistantMessage,
+    tracker: ContextTracker,
+    agent: 'arbiter' | 'orchestrator'
+  ): void {
+    const msg = message.message as any;
+    const usage = msg.usage;
+    if (!usage) return;
+
+    // CRITICAL: Dedupe by message.id, NOT uuid
+    // uuid is per streaming chunk, message.id is per API call
+    const msgId = msg.id;
+    if (!msgId || tracker.seenMsgIds.has(msgId)) return;
+    tracker.seenMsgIds.add(msgId);
+
+    // Primary formula: max(cache_read) + sum(input) + sum(output)
+    const cacheRead = usage.cache_read_input_tokens || 0;
+    const input = usage.input_tokens || 0;
+    const output = usage.output_tokens || 0;
+    const cacheCreate = usage.cache_creation_input_tokens || 0;
+
+    tracker.maxCacheRead = Math.max(tracker.maxCacheRead, cacheRead);
+    tracker.sumInput += input;
+    tracker.sumOutput += output;
+    tracker.sumCacheCreate += cacheCreate;  // For auditing only
+
+    // Calculate percentages
+    const primaryTokens = getContextTokens(tracker);
+    const primaryPct = getContextPercent(tracker);
+    const auditTokens = getAuditContextTokens(tracker);
+    const auditPct = (auditTokens / MAX_CONTEXT_TOKENS) * 100;
+
+    // Log all four values for debugging/auditing
+    this.callbacks.onDebugLog?.({
+      type: 'system',
+      agent,
+      text: `Context: ${primaryPct.toFixed(1)}% (${primaryTokens} tokens)`,
+      details: {
+        messageId: msgId,
+        uniqueApiCalls: tracker.seenMsgIds.size,
+        // All four raw values
+        max_cache_read: tracker.maxCacheRead,
+        sum_input: tracker.sumInput,
+        sum_output: tracker.sumOutput,
+        sum_cache_create: tracker.sumCacheCreate,
+        // This message's values
+        this_message: { cache_read: cacheRead, input, output, cache_create: cacheCreate },
+        // Computed formulas
+        primary_tokens: primaryTokens,
+        primary_percent: primaryPct,
+        audit_tokens: auditTokens,
+        audit_percent: auditPct,
+      },
+    });
+
+    // Update state and notify callback
+    if (agent === 'arbiter') {
+      updateArbiterContext(this.state, primaryPct);
+      const orchPct = this.state.currentOrchestrator
+        ? getContextPercent(this.orchestratorContextTracker!)
+        : null;
+      this.callbacks.onContextUpdate(primaryPct, orchPct);
+    } else {
+      updateOrchestratorContext(this.state, primaryPct);
+      this.callbacks.onContextUpdate(
+        getContextPercent(this.arbiterContextTracker),
+        primaryPct
+      );
     }
   }
 
