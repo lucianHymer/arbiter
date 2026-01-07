@@ -664,8 +664,29 @@ export class Router {
           const pct = (total / MAX_CONTEXT_TOKENS) * 100;
 
           // Context should never decrease - use the maximum of current and new
-          const finalPct = Math.max(pct, this.state.arbiterContextPercent);
+          const previousPct = this.state.arbiterContextPercent;
+          const finalPct = Math.max(pct, previousPct);
           updateArbiterContext(this.state, finalPct);
+
+          // Log context calculation for debugging
+          this.callbacks.onDebugLog?.({
+            type: 'system',
+            agent: 'arbiter',
+            text: `Context: ${finalPct.toFixed(1)}% (was ${previousPct.toFixed(1)}%, calc ${pct.toFixed(1)}%)`,
+            details: {
+              calculation: {
+                input_tokens: usage.input_tokens || 0,
+                cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+                cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+                total_tokens: total,
+                max_tokens: MAX_CONTEXT_TOKENS,
+                calculated_percent: pct,
+                previous_percent: previousPct,
+                final_percent: finalPct,
+              },
+              full_usage: usage,
+            },
+          });
 
           // Notify callback
           const orchPct = this.state.currentOrchestrator?.contextPercent ?? null;
@@ -750,6 +771,26 @@ export class Router {
             const previousPct = this.state.currentOrchestrator.contextPercent;
             const finalPct = Math.max(pct, previousPct);
             updateOrchestratorContext(this.state, finalPct);
+
+            // Log context calculation for debugging
+            this.callbacks.onDebugLog?.({
+              type: 'system',
+              agent: 'orchestrator',
+              text: `Context: ${finalPct.toFixed(1)}% (was ${previousPct.toFixed(1)}%, calc ${pct.toFixed(1)}%)`,
+              details: {
+                calculation: {
+                  input_tokens: usage.input_tokens || 0,
+                  cache_read_input_tokens: usage.cache_read_input_tokens || 0,
+                  cache_creation_input_tokens: usage.cache_creation_input_tokens || 0,
+                  total_tokens: total,
+                  max_tokens: MAX_CONTEXT_TOKENS,
+                  calculated_percent: pct,
+                  final_percent: finalPct,
+                },
+                full_usage: usage,
+              },
+            });
+
             this.callbacks.onContextUpdate(
               this.state.arbiterContextPercent,
               finalPct

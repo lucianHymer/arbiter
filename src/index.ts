@@ -69,25 +69,27 @@ async function main(): Promise<void> {
     process.exit(exitCode);
   }
 
-  // Set up signal handlers for graceful shutdown
-  process.on('SIGINT', () => {
-    shutdown(0);
-  });
-
+  // Note: SIGINT is handled by the TUI for confirmation dialogs
+  // We only handle SIGTERM for graceful container shutdown
   process.on('SIGTERM', () => {
     shutdown(0);
   });
 
   try {
     // Show character selection screen first
-    let selectedCharacter = await showCharacterSelect();
+    let selectResult = await showCharacterSelect();
+    let selectedCharacter = selectResult.character;
 
-    // Show animated forest intro with selected character
+    // Show animated forest intro with selected character (unless skipped)
     // If player dies, go back to character select
-    let result = await showForestIntro(selectedCharacter);
-    while (result === 'death') {
-      selectedCharacter = await showCharacterSelect();
-      result = await showForestIntro(selectedCharacter);
+    if (!selectResult.skipIntro) {
+      let result = await showForestIntro(selectedCharacter);
+      while (result === 'death') {
+        selectResult = await showCharacterSelect();
+        selectedCharacter = selectResult.character;
+        if (selectResult.skipIntro) break;
+        result = await showForestIntro(selectedCharacter);
+      }
     }
 
     // Create initial application state
@@ -109,6 +111,12 @@ async function main(): Promise<void> {
       if (router) {
         await router.sendHumanMessage(text);
       }
+    });
+
+    // Wire TUI exit to shutdown
+    // When user confirms exit (presses 'y'), perform graceful shutdown
+    tui.onExit(() => {
+      shutdown(0);
     });
 
     // Start TUI (takes over terminal)

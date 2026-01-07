@@ -6,6 +6,8 @@
  */
 
 import termKit from 'terminal-kit';
+import * as fs from 'fs';
+import * as path from 'path';
 import {
   Tileset,
   TILE,
@@ -19,6 +21,7 @@ import {
 } from './tileset.js';
 import {
   SceneState,
+  HopState,
   TileSpec,
   createInitialSceneState,
   createScene,
@@ -46,6 +49,8 @@ export interface TUI {
   getRouterCallbacks(): RouterCallbacks;
   /** Registers a callback for user input */
   onInput(callback: (text: string) => void): void;
+  /** Registers a callback for when user confirms exit */
+  onExit(callback: () => void): void;
   /** Start the loading animation for arbiter or orchestrator */
   startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void;
   /** Stop the loading animation */
@@ -79,6 +84,9 @@ interface TUIState {
   // Animation state
   animationFrame: number;
   waitingFor: WaitingState;
+
+  // Exit confirmation state
+  pendingExit: boolean;
 }
 
 /**
@@ -107,6 +115,9 @@ const TILE_AREA_HEIGHT = SCENE_HEIGHT * CHAR_HEIGHT; // 48 rows
 
 // Animation
 const ANIMATION_INTERVAL = 250; // ms
+
+// Debug log file (temporary, cleared each session)
+const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', '.arbiter.tmp.log');
 
 // Colors
 const COLORS = {
@@ -204,6 +215,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     toolCallCount: 0,
     animationFrame: 0,
     waitingFor: 'none',
+    pendingExit: false,
   };
 
   // Tracking for minimal redraws
@@ -220,36 +232,37 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
   // Callbacks
   let inputCallback: ((text: string) => void) | null = null;
+  let exitCallback: (() => void) | null = null;
   let animationInterval: NodeJS.Timeout | null = null;
   let isRunning = false;
+  let inLogViewer = false; // Track when log viewer is open
+  let entranceComplete = false; // Track if entrance animation is done
+  let pendingArbiterMessage: string | null = null; // Message waiting for entrance to complete
+  let arbiterWalkInterval: NodeJS.Timeout | null = null; // For walk animations
 
   // ============================================================================
   // Drawing Functions (Strategy 5 - Minimal Redraws)
   // ============================================================================
 
   /**
-   * Draw tile scene - only redraws if animation frame changed
+   * Draw tile scene
+   * @param force Force redraw even if animation frame unchanged
    */
-  function drawTiles() {
-    if (state.animationFrame === tracker.lastTileFrame) return;
+  function drawTiles(force: boolean = false) {
+    if (!force && state.animationFrame === tracker.lastTileFrame) return;
     tracker.lastTileFrame = state.animationFrame;
 
     if (!state.tileset) return;
     const layout = getLayout();
 
-    // Update scene state based on animation
-    state.sceneState.hopFrame = state.animationFrame % 2 === 0;
-    state.sceneState.bubbleFrame = state.animationFrame % 3 === 0;
-
     // Create scene from state
     const scene = createScene(state.sceneState);
 
-    // Render scene to ANSI string
+    // Render scene to ANSI string (activeHops from sceneState)
     const sceneStr = renderScene(
       state.tileset,
       scene,
-      state.waitingFor !== 'none' ? (state.waitingFor === 'arbiter' ? 'arbiter' : 'conjuring') : null,
-      state.sceneState.hopFrame
+      state.sceneState.activeHops
     );
 
     // Split by lines and write each line
@@ -282,14 +295,19 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const maxScroll = Math.max(0, totalLines - visibleLines);
     state.scrollOffset = Math.min(Math.max(0, state.scrollOffset), maxScroll);
 
-    // Render messages to line array
+    // Render messages to line array (with 1-line padding between messages)
     const renderedLines: { text: string; color: string }[] = [];
-    for (const msg of state.messages) {
+    for (let i = 0; i < state.messages.length; i++) {
+      const msg = state.messages[i];
       const prefix = getMessagePrefix(msg);
       const color = getMessageColor(msg.speaker);
       const wrappedLines = wrapText(prefix + msg.text, layout.chatArea.width);
       for (const line of wrappedLines) {
         renderedLines.push({ text: line, color });
+      }
+      // Add blank line between messages (but not after the last one)
+      if (i < state.messages.length - 1) {
+        renderedLines.push({ text: '', color: COLORS.reset });
       }
     }
 
@@ -336,37 +354,71 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     term.moveTo(statusX, statusY);
     process.stdout.write(' '.repeat(statusWidth));
 
-    // Build status string
-    let status = '';
-
-    // Mode indicator
-    if (state.mode === 'INSERT') {
-      status += '\x1b[42;30m INSERT \x1b[0m '; // Green bg, black text
-    } else {
-      status += '\x1b[44;37m NORMAL \x1b[0m '; // Blue bg, white text
+    // Exit confirmation mode - show special prompt
+    if (state.pendingExit) {
+      const arbiterSid = appState.arbiterSessionId || '(none)';
+      const orchSid = appState.currentOrchestrator?.sessionId;
+      let exitPrompt = `\x1b[41;97m EXIT? \x1b[0m \x1b[1mPress y to quit, any other key to cancel\x1b[0m`;
+      exitPrompt += `  \x1b[2mArbiter: ${arbiterSid}`;
+      if (orchSid) {
+        exitPrompt += ` | Orch: ${orchSid}`;
+      }
+      exitPrompt += '\x1b[0m';
+      term.moveTo(statusX, statusY);
+      process.stdout.write(exitPrompt);
+      return;
     }
 
+    // Build left side (mode + hints)
+    let leftSide = '';
+    let leftLen = 0; // Track visible length (no ANSI codes)
+
+    if (state.mode === 'INSERT') {
+      leftSide += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
+      leftSide += '\x1b[2m    esc:normal  ·  <ctrl-c>:quit \x1b[0m'; // Dim hint with spacing
+      leftLen = 8 + 34; // " INSERT " + "    esc:normal  ·  <ctrl-c>:quit "
+    } else {
+      leftSide += '\x1b[48;2;130;44;19m\x1b[97m NORMAL \x1b[0m'; // Brown bg (130,44,19), bright white text
+      leftSide += '\x1b[2m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m'; // Dim hint with spacing
+      leftLen = 8 + 57; // " NORMAL " + "    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit "
+    }
+
+    // Build right side (context + tool + waiting)
+    let rightSide = '';
+    let rightLen = 0;
+
     // Context percentage
-    status += `\x1b[33mArbiter: ${state.arbiterContextPercent.toFixed(1)}%\x1b[0m`;
+    const arbiterCtx = `Arbiter: ${state.arbiterContextPercent.toFixed(1)}%`;
+    rightSide += `\x1b[33m${arbiterCtx}\x1b[0m`;
+    rightLen += arbiterCtx.length;
 
     if (state.orchestratorContextPercent !== null) {
-      status += ` \x1b[36m| Conjuring: ${state.orchestratorContextPercent.toFixed(1)}%\x1b[0m`;
+      const orchCtx = ` | Conjuring: ${state.orchestratorContextPercent.toFixed(1)}%`;
+      rightSide += `\x1b[36m${orchCtx}\x1b[0m`;
+      rightLen += orchCtx.length;
     }
 
     // Tool info
     if (state.currentTool) {
-      status += ` \x1b[35m| ${state.currentTool} (${state.toolCallCount})\x1b[0m`;
+      const toolInfo = ` | ${state.currentTool} (${state.toolCallCount})`;
+      rightSide += `\x1b[35m${toolInfo}\x1b[0m`;
+      rightLen += toolInfo.length;
     }
 
     // Waiting indicator
     if (state.waitingFor !== 'none') {
       const dots = '.'.repeat((state.animationFrame % 3) + 1);
       const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
-      status += ` \x1b[2m| ${waiting} thinking${dots}\x1b[0m`;
+      const waitInfo = ` | ${waiting} thinking${dots}`;
+      rightSide += `\x1b[2m${waitInfo}\x1b[0m`;
+      rightLen += waitInfo.length;
     }
 
+    // Calculate spacing between left and right
+    const spacing = Math.max(1, statusWidth - leftLen - rightLen);
+
     term.moveTo(statusX, statusY);
-    process.stdout.write(status.substring(0, statusWidth * 2)); // Allow for ANSI codes
+    process.stdout.write(leftSide + ' '.repeat(spacing) + rightSide);
   }
 
   /**
@@ -416,7 +468,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastWaitingFor = 'none';
 
     term.clear();
-    drawTiles();
+    drawTiles(true);
     drawChat(true);
     drawStatus(true);
     drawInput(true);
@@ -462,18 +514,39 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
   function wrapText(text: string, width: number): string[] {
     const lines: string[] = [];
-    const words = text.split(' ');
-    let currentLine = '';
 
-    for (const word of words) {
-      if (currentLine.length + word.length + 1 <= width) {
-        currentLine += (currentLine ? ' ' : '') + word;
-      } else {
-        if (currentLine) lines.push(currentLine);
-        currentLine = word;
+    // First split by newlines to preserve paragraph breaks
+    const paragraphs = text.split('\n');
+
+    for (const paragraph of paragraphs) {
+      const words = paragraph.split(' ');
+      let currentLine = '';
+
+      for (const word of words) {
+        // Handle words longer than width by breaking them
+        if (word.length > width) {
+          if (currentLine) {
+            lines.push(currentLine);
+            currentLine = '';
+          }
+          // Break the long word into chunks
+          for (let i = 0; i < word.length; i += width) {
+            lines.push(word.substring(i, i + width));
+          }
+          continue;
+        }
+
+        if (currentLine.length + word.length + 1 <= width) {
+          currentLine += (currentLine ? ' ' : '') + word;
+        } else {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        }
       }
+      if (currentLine) lines.push(currentLine);
+      // Empty paragraph becomes empty line
+      if (paragraph === '') lines.push('');
     }
-    if (currentLine) lines.push(currentLine);
 
     return lines.length > 0 ? lines : [''];
   }
@@ -580,21 +653,229 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawChat();
         break;
 
+      case 'o':
+        // Open debug log with less
+        openLogViewer();
+        break;
+
       default:
         break;
     }
+  }
+
+  /**
+   * Opens a simple built-in log viewer (avoids signal handling issues with less)
+   */
+  function openLogViewer() {
+    // Check if log file exists
+    if (!fs.existsSync(DEBUG_LOG_PATH)) {
+      return;
+    }
+
+    inLogViewer = true;
+
+    // Read the log file
+    let logContent: string;
+    try {
+      logContent = fs.readFileSync(DEBUG_LOG_PATH, 'utf-8');
+    } catch (err) {
+      inLogViewer = false;
+      return;
+    }
+
+    const logLines = logContent.split('\n');
+    let logScrollOffset = Math.max(0, logLines.length - (term.height - 2)); // Start at bottom
+
+    function drawLogViewer() {
+      term.clear();
+      const visibleLines = term.height - 2; // Leave room for header and footer
+
+      // Header - green like INSERT mode
+      term.moveTo(1, 1);
+      process.stdout.write('\x1b[42;30m DEBUG LOG \x1b[0m');
+      process.stdout.write(`\x1b[2m (${logLines.length} lines, showing ${logScrollOffset + 1}-${Math.min(logScrollOffset + visibleLines, logLines.length)})\x1b[0m`);
+
+      // Log content
+      for (let i = 0; i < visibleLines; i++) {
+        const lineIdx = logScrollOffset + i;
+        term.moveTo(1, i + 2);
+        term.eraseLine();
+        if (lineIdx < logLines.length) {
+          // Truncate long lines and display with default colors
+          const line = logLines[lineIdx].substring(0, term.width - 1);
+          process.stdout.write('\x1b[0m' + line);
+        }
+      }
+
+      // Footer - green like INSERT mode
+      term.moveTo(1, term.height);
+      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  ^C:quit \x1b[0m');
+    }
+
+    drawLogViewer();
+
+    // Stop animation while in log viewer
+    stopAnimation();
+
+    // Handle log viewer keys
+    const logKeyHandler = (key: string) => {
+      if (key === 'q' || key === 'ESCAPE') {
+        // Close log viewer
+        term.off('key', logKeyHandler);
+        inLogViewer = false;
+        startAnimation();
+        fullDraw();
+        return;
+      }
+
+      if (key === 'CTRL_C' || key === 'CTRL_Z') {
+        // Close log viewer and show exit prompt
+        term.off('key', logKeyHandler);
+        inLogViewer = false;
+        startAnimation();
+        fullDraw();
+        state.pendingExit = true;
+        drawStatus(true);
+        return;
+      }
+
+      const visibleLines = term.height - 2;
+      const halfPage = Math.floor(visibleLines / 2);
+      const maxScroll = Math.max(0, logLines.length - visibleLines);
+
+      if (key === 'j' || key === 'DOWN') {
+        logScrollOffset = Math.min(maxScroll, logScrollOffset + 1);
+        drawLogViewer();
+      } else if (key === 'k' || key === 'UP') {
+        logScrollOffset = Math.max(0, logScrollOffset - 1);
+        drawLogViewer();
+      } else if (key === 'g') {
+        logScrollOffset = 0;
+        drawLogViewer();
+      } else if (key === 'G') {
+        logScrollOffset = maxScroll;
+        drawLogViewer();
+      } else if (key === 'u') {
+        // Half page up
+        logScrollOffset = Math.max(0, logScrollOffset - halfPage);
+        drawLogViewer();
+      } else if (key === 'd') {
+        // Half page down
+        logScrollOffset = Math.min(maxScroll, logScrollOffset + halfPage);
+        drawLogViewer();
+      } else if (key === 'b' || key === 'PAGE_UP') {
+        // Full page up
+        logScrollOffset = Math.max(0, logScrollOffset - visibleLines);
+        drawLogViewer();
+      } else if (key === 'f' || key === 'PAGE_DOWN') {
+        // Full page down
+        logScrollOffset = Math.min(maxScroll, logScrollOffset + visibleLines);
+        drawLogViewer();
+      }
+    };
+
+    term.on('key', logKeyHandler);
   }
 
   // ============================================================================
   // Animation
   // ============================================================================
 
+  /**
+   * Get the current position (row, col) of a character type
+   */
+  function getCharacterPosition(target: 'human' | 'arbiter' | 'conjuring'): { row: number; col: number } {
+    if (target === 'human') {
+      return { row: 2, col: state.sceneState.humanCol };
+    } else if (target === 'arbiter') {
+      // Map arbiterPos to actual row/col
+      const pos = state.sceneState.arbiterPos;
+      switch (pos) {
+        case 0: return { row: 2, col: 2 };
+        case 1: return { row: 2, col: 3 };
+        case 2: return { row: 2, col: 4 };
+        case 3: return { row: 3, col: 4 };
+        default: return { row: 2, col: 3 }; // fallback
+      }
+    } else {
+      // conjuring = first demon at row 2, col 6
+      return { row: 2, col: 6 };
+    }
+  }
+
+  /**
+   * Trigger a hop animation at a specific position
+   * @param row Tile row
+   * @param col Tile column
+   * @param count Number of hops (default 1)
+   */
+  function triggerHop(row: number, col: number, count: number = 1) {
+    const key = `${row},${col}`;
+    state.sceneState.activeHops.set(key, {
+      remaining: count,
+      frameInHop: 0, // Start in "up" position
+    });
+    drawTiles(true);
+  }
+
+  /**
+   * Trigger hop by character name (convenience wrapper)
+   */
+  function triggerCharacterHop(target: 'human' | 'arbiter' | 'conjuring', count: number = 1) {
+    const pos = getCharacterPosition(target);
+    triggerHop(pos.row, pos.col, count);
+  }
+
+  /**
+   * Stop all active hops
+   */
+  function clearAllHops() {
+    state.sceneState.activeHops.clear();
+    drawTiles(true);
+  }
+
+  /**
+   * Tick all active hop animations (called every ANIMATION_INTERVAL)
+   * Each hop = 2 frames (up on frame 0, down on frame 1)
+   */
+  function tickHops() {
+    let anyActive = false;
+    const toRemove: string[] = [];
+
+    for (const [key, hopState] of state.sceneState.activeHops) {
+      anyActive = true;
+
+      // Advance frame within current hop
+      if (hopState.frameInHop === 0) {
+        // Was up, now go down
+        hopState.frameInHop = 1;
+      } else {
+        // Was down, complete this hop
+        hopState.remaining--;
+        if (hopState.remaining <= 0) {
+          toRemove.push(key);
+        } else {
+          // Start next hop
+          hopState.frameInHop = 0;
+        }
+      }
+    }
+
+    // Remove completed hops
+    for (const key of toRemove) {
+      state.sceneState.activeHops.delete(key);
+    }
+
+    return anyActive || toRemove.length > 0;
+  }
+
   function startAnimation() {
     animationInterval = setInterval(() => {
       state.animationFrame = (state.animationFrame + 1) % 8;
 
-      // Only redraw tiles if waiting (animation playing)
-      if (state.waitingFor !== 'none') {
+      // Tick hop animations and redraw if any are active
+      const hasHops = tickHops();
+      if (hasHops || state.waitingFor !== 'none') {
         drawTiles();
       }
 
@@ -610,6 +891,108 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }
   }
 
+  /**
+   * Animate the arbiter walking to a target position
+   * Old arbiter shuffles slowly - 1300ms per step
+   *
+   * Position mapping:
+   * - Pos 3: by fire (row 3, col 4) - starting position
+   * - Pos 2: by cauldron (row 2, col 4) - working position
+   * - Pos 1: center (row 2, col 3)
+   * - Pos 0: near human (row 2, col 2)
+   */
+  function animateArbiterWalk(
+    targetPos: -1 | 0 | 1 | 2 | 3,
+    onComplete?: () => void
+  ) {
+    // Clear any existing walk animation
+    if (arbiterWalkInterval) {
+      clearInterval(arbiterWalkInterval);
+      arbiterWalkInterval = null;
+    }
+
+    const currentPos = state.sceneState.arbiterPos;
+    if (currentPos === targetPos) {
+      onComplete?.();
+      return;
+    }
+
+    const direction = targetPos > currentPos ? 1 : -1;
+
+    arbiterWalkInterval = setInterval(() => {
+      const newPos = state.sceneState.arbiterPos + direction;
+
+      // Type-safe position clamping
+      if (newPos >= -1 && newPos <= 3) {
+        state.sceneState.arbiterPos = newPos as -1 | 0 | 1 | 2 | 3;
+        drawTiles(true); // Force redraw for walk animation
+
+        if (newPos === targetPos) {
+          clearInterval(arbiterWalkInterval!);
+          arbiterWalkInterval = null;
+          onComplete?.();
+        }
+      } else {
+        clearInterval(arbiterWalkInterval!);
+        arbiterWalkInterval = null;
+        onComplete?.();
+      }
+    }, 1000); // 1 second per step, 3 seconds for full walk
+  }
+
+  /**
+   * Run the full entrance sequence:
+   * 1. Human walks in from left (col 0 → 1)
+   * 2. Human hops twice (surprised)
+   * 3. Arbiter hops twice (notices visitor)
+   * 4. Arbiter walks from fire to human (3 steps) - starts quickly after hop
+   */
+  function runEntranceSequence() {
+    // Show "the arbiter approaches" message
+    addMessage('system', 'The arbiter approaches...');
+
+    // Timeline:
+    // 0ms: human at col 0
+    // 400ms: human walks to col 1
+    // 900ms: human hops twice (takes 1000ms, ends ~1900ms)
+    // 1800ms: arbiter hops twice (takes 1000ms) - waits for human to finish
+    // 2050ms: arbiter starts walking (quick start, 250ms after hop begins)
+    // 5050ms: entrance complete
+
+    // Step 1: Human walks in (already at col 0, moves to col 1)
+    setTimeout(() => {
+      if (!isRunning) return;
+      state.sceneState.humanCol = 1;
+      drawTiles(true);
+    }, 400);
+
+    // Step 2: Human hops twice (surprised to see the arbiter)
+    setTimeout(() => {
+      if (!isRunning) return;
+      triggerCharacterHop('human', 2);
+    }, 900);
+
+    // Step 3: Arbiter hops twice at fire position (notices the visitor)
+    // Wait longer so human finishes hopping first
+    setTimeout(() => {
+      if (!isRunning) return;
+      triggerCharacterHop('arbiter', 2);
+    }, 1800);
+
+    // Step 4: Arbiter walks from pos 3 to pos 0 (starts quickly after hop begins)
+    setTimeout(() => {
+      if (!isRunning) return;
+      animateArbiterWalk(0, () => {
+        // Entrance complete - show any pending message
+        entranceComplete = true;
+        if (pendingArbiterMessage) {
+          addMessage('arbiter', pendingArbiterMessage);
+          pendingArbiterMessage = null;
+        }
+      });
+    }, 2050);
+  }
+
   // ============================================================================
   // Router Callbacks
   // ============================================================================
@@ -621,7 +1004,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       },
 
       onArbiterMessage: (text: string) => {
-        addMessage('arbiter', text);
+        // If entrance animation isn't complete, queue the message
+        if (!entranceComplete) {
+          pendingArbiterMessage = text;
+        } else {
+          addMessage('arbiter', text);
+        }
       },
 
       onOrchestratorMessage: (orchestratorNumber: number, text: string) => {
@@ -641,32 +1029,54 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       },
 
       onModeChange: (mode: AppState['mode']) => {
-        // Update scene state based on app mode
+        // Animate arbiter walking to new position with spellbook animation
         if (mode === 'arbiter_to_orchestrator') {
-          state.sceneState.arbiterPos = 2; // Move arbiter to spellbook
+          // Going to work position: walk first, then show spellbook
+          animateArbiterWalk(2, () => {
+            // One frame delay, then show spellbook
+            setTimeout(() => {
+              state.sceneState.showSpellbook = true;
+              drawTiles(true);
+            }, ANIMATION_INTERVAL);
+          });
         } else {
-          state.sceneState.arbiterPos = 0; // Move arbiter back to human
+          // Leaving work position: hide spellbook first, then walk
+          state.sceneState.showSpellbook = false;
+          drawTiles(true);
+          // One frame delay, then start walking
+          setTimeout(() => {
+            animateArbiterWalk(0);
+          }, ANIMATION_INTERVAL);
         }
-        drawTiles();
       },
 
       onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
+        // Ignore waiting during entrance sequence - don't want arbiter hopping early
+        if (!entranceComplete) return;
+
         state.waitingFor = waitingFor;
-        state.sceneState.workingTarget = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
-        drawTiles();
+        // Hop for 3 seconds (6 hops at 500ms each)
+        const target = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
+        triggerCharacterHop(target, 6);
+        // Turn on bubbles (stays on until work is done)
+        state.sceneState.bubbleVisible = true;
+        drawTiles(true);
         drawStatus();
       },
 
       onWaitingStop: () => {
         state.waitingFor = 'none';
-        state.sceneState.workingTarget = null;
-        drawTiles();
+        // Clear any remaining hops
+        clearAllHops();
+        // Turn off bubbles
+        state.sceneState.bubbleVisible = false;
+        drawTiles(true);
         drawStatus();
       },
 
       onOrchestratorSpawn: (orchestratorNumber: number) => {
         state.sceneState.demonCount = orchestratorNumber;
-        drawTiles();
+        drawTiles(true);
       },
 
       onOrchestratorDisconnect: () => {
@@ -674,13 +1084,43 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.orchestratorContextPercent = null;
         state.currentTool = null;
         state.toolCallCount = 0;
-        drawTiles();
+        drawTiles(true);
         drawStatus();
       },
 
-      onDebugLog: (_entry: DebugLogEntry) => {
-        // Debug logging - could be displayed in a separate panel
-        // For now, we don't display debug logs in the main TUI
+      onDebugLog: (entry: DebugLogEntry) => {
+        // Write to debug log file
+        const timestamp = new Date().toISOString();
+        let logLine = `[${timestamp}] [${entry.type.toUpperCase()}]`;
+
+        if (entry.agent) {
+          logLine += ` [${entry.agent}]`;
+        }
+        if (entry.speaker) {
+          logLine += ` ${entry.speaker}:`;
+        }
+        if (entry.messageType) {
+          logLine += ` (${entry.messageType})`;
+        }
+        logLine += ` ${entry.text}`;
+
+        // Add full details as JSON if present
+        if (entry.details) {
+          logLine += `\n    DETAILS: ${JSON.stringify(entry.details, null, 2).split('\n').join('\n    ')}`;
+        }
+
+        logLine += '\n';
+
+        // Ensure directory exists and append to file
+        try {
+          const dir = path.dirname(DEBUG_LOG_PATH);
+          if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+          }
+          fs.appendFileSync(DEBUG_LOG_PATH, logLine);
+        } catch (err) {
+          // Silently ignore write errors
+        }
       },
     };
   }
@@ -693,6 +1133,29 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (isRunning) return;
     isRunning = true;
 
+    // Remove any existing SIGINT handlers (terminal-kit or others may add them)
+    process.removeAllListeners('SIGINT');
+
+    // Set up global SIGINT handler to prevent default exit behavior
+    // terminal-kit handles CTRL_C as a key event, but this catches any SIGINT that slips through
+    process.on('SIGINT', () => {
+      if (!state.pendingExit) {
+        state.pendingExit = true;
+        drawStatus(true);
+      }
+    });
+
+    // Clear the debug log file for this session
+    try {
+      const dir = path.dirname(DEBUG_LOG_PATH);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(DEBUG_LOG_PATH, `=== Arbiter Session ${new Date().toISOString()} ===\n\n`);
+    } catch (err) {
+      // Ignore errors
+    }
+
     // Load tileset
     try {
       state.tileset = await loadTileset();
@@ -700,15 +1163,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       console.error('Failed to load tileset:', err);
       throw err;
     }
-
-    // Add intro message - a narrator message that sets the scene
-    // This is NOT sent to the agent, just displayed for the user
-    state.messages.push({
-      id: 'intro-message',
-      speaker: 'system',
-      text: 'You stand before the Arbiter. Speak your query, and ancient wisdom shall answer.',
-      timestamp: new Date(),
-    });
 
     // Enter fullscreen mode
     term.fullscreen(true);
@@ -720,24 +1174,36 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Start animation timer
     startAnimation();
 
-    // Entry animation: after 400ms, move character from col 0 to col 1
-    // This creates continuity from the forest intro where the character
-    // walked off the right side and now enters the main scene from the left
-    setTimeout(() => {
-      if (isRunning) {
-        state.sceneState.humanCol = 1; // Move to normal position
-        tracker.lastTileFrame = -1; // Force tile redraw
-        drawTiles();
-      }
-    }, 400);
+    // Run the full entrance sequence immediately
+    // Human walks in, both characters hop, arbiter walks to human
+    runEntranceSequence();
 
     // Set up input handling
     term.grabInput(true);
 
     term.on('key', (key: string) => {
+      // Handle exit confirmation mode
+      if (state.pendingExit) {
+        if (key === 'y' || key === 'Y') {
+          // Call exit callback if registered, otherwise exit directly
+          if (exitCallback) {
+            exitCallback();
+          } else {
+            stop();
+            process.exit(0);
+          }
+        } else {
+          // Cancel exit
+          state.pendingExit = false;
+          drawStatus(true);
+        }
+        return;
+      }
+
       if (key === 'CTRL_C' || key === 'CTRL_Z') {
-        stop();
-        process.exit(0);
+        // Show exit confirmation
+        state.pendingExit = true;
+        drawStatus(true);
         return;
       }
       handleKeypress(key);
@@ -758,6 +1224,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     term.hideCursor(false);
     term.styleReset();
 
+    // Print session IDs on exit
+    console.log('\n\x1b[1mSession IDs:\x1b[0m');
+    if (appState.arbiterSessionId) {
+      console.log(`  Arbiter: \x1b[33m${appState.arbiterSessionId}\x1b[0m`);
+    } else {
+      console.log('  Arbiter: \x1b[2m(no session)\x1b[0m');
+    }
+    if (appState.currentOrchestrator) {
+      console.log(`  Orchestrator: \x1b[36m${appState.currentOrchestrator.sessionId}\x1b[0m`);
+    }
+    console.log('');
+
     isRunning = false;
   }
 
@@ -765,17 +1243,30 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     inputCallback = callback;
   }
 
+  function onExit(callback: () => void): void {
+    exitCallback = callback;
+  }
+
   function startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void {
+    // Ignore during entrance sequence
+    if (!entranceComplete) return;
+
     state.waitingFor = waitingFor;
-    state.sceneState.workingTarget = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
-    drawTiles();
+    // Hop for 3 seconds (6 hops at 500ms each)
+    const target = waitingFor === 'arbiter' ? 'arbiter' : 'conjuring';
+    triggerCharacterHop(target, 6);
+    // Turn on bubbles
+    state.sceneState.bubbleVisible = true;
+    drawTiles(true);
     drawStatus();
   }
 
   function stopWaiting(): void {
     state.waitingFor = 'none';
-    state.sceneState.workingTarget = null;
-    drawTiles();
+    // Clear any remaining hops and turn off bubbles
+    clearAllHops();
+    state.sceneState.bubbleVisible = false;
+    drawTiles(true);
     drawStatus();
   }
 
@@ -784,6 +1275,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     stop,
     getRouterCallbacks,
     onInput,
+    onExit,
     startWaiting,
     stopWaiting,
   };

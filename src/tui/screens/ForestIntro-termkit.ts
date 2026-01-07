@@ -715,13 +715,13 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       const msgY = deathOffsetY + deathHeight + 2;
       const msg1 = `${COLOR_DEATH}${BOLD}You strayed from the path.${RESET}`;
       const msg2 = `${COLOR_DEATH}The forest claims another soul.${RESET}`;
-      const msg3 = `${DIM}Press any key to try again...${RESET}`;
+      const msg3 = `${DIM}Press y to try again...${RESET}`;
 
       term.moveTo(Math.max(1, Math.floor((width - 26) / 2)), msgY);
       process.stdout.write(msg1);
       term.moveTo(Math.max(1, Math.floor((width - 32) / 2)), msgY + 1);
       process.stdout.write(msg2);
-      term.moveTo(Math.max(1, Math.floor((width - 28) / 2)), msgY + 3);
+      term.moveTo(Math.max(1, Math.floor((width - 22) / 2)), msgY + 3);
       process.stdout.write(msg3);
     }
 
@@ -748,10 +748,12 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         return;
       }
 
-      // Death screen - any key to return to character select
+      // Death screen - only 'y' to retry
       if (state.phase === 'dead') {
-        cleanup();
-        resolve('death');
+        if (key === 'y' || key === 'Y') {
+          cleanup();
+          resolve('death');
+        }
         return;
       }
 

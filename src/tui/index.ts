@@ -13,7 +13,7 @@ export { createTUI, type TUI } from './tui-termkit.js';
 export { showForestIntro } from './screens/ForestIntro-termkit.js';
 
 // Re-export the terminal-kit based CharacterSelect
-export { showCharacterSelect } from './screens/CharacterSelect-termkit.js';
+export { showCharacterSelect, type CharacterSelectResult } from './screens/CharacterSelect-termkit.js';
 
 // Re-export types for consumers
 export type { RouterCallbacks, DebugLogEntry } from '../router.js';

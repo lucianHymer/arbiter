@@ -132,7 +132,12 @@ function getRowWidth(): number {
  *
  * @returns Promise<number> - The selected tile index (190-197)
  */
-export async function showCharacterSelect(): Promise<number> {
+export interface CharacterSelectResult {
+  character: number;
+  skipIntro: boolean;
+}
+
+export async function showCharacterSelect(): Promise<CharacterSelectResult> {
   return new Promise(async (resolve) => {
     // Load tileset
     const tileset = await loadTileset();
@@ -206,7 +211,7 @@ export async function showCharacterSelect(): Promise<number> {
 
       // Instructions at bottom
       const instructionY = nameY + 2;
-      const instructions = '[LEFT/RIGHT or H/L] Navigate   [ENTER] Select   [Q or Ctrl+C] Exit';
+      const instructions = '[LEFT/RIGHT or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
       term.moveTo(Math.max(1, Math.floor((width - instructions.length) / 2)), instructionY);
       process.stdout.write(`${DIM}${instructions}${RESET}`);
     }
@@ -245,9 +250,13 @@ export async function showCharacterSelect(): Promise<number> {
         selectedIndex = (selectedIndex + 4) % CHARACTER_TILES.length;
         drawScreen();
       } else if (key === 'ENTER') {
-        // Confirm selection
+        // Confirm selection, go to path intro
         cleanup();
-        resolve(CHARACTER_TILES[selectedIndex]);
+        resolve({ character: CHARACTER_TILES[selectedIndex], skipIntro: false });
+      } else if (key === ' ') {
+        // Skip intro, go straight to arbiter
+        cleanup();
+        resolve({ character: CHARACTER_TILES[selectedIndex], skipIntro: true });
       } else if (key === 'q' || key === 'CTRL_C' || key === 'CTRL_Z') {
         // Exit application
         cleanup();

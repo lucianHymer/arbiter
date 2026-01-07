@@ -24,17 +24,28 @@ import {
 // ============================================================================
 
 /**
+ * State for a single hop animation at a position
+ * Each hop = 500ms (250ms up + 250ms down)
+ */
+export interface HopState {
+  remaining: number; // Number of hops left (0 = done)
+  frameInHop: 0 | 1; // 0 = up (hopping), 1 = down (resting)
+}
+
+/**
  * Scene state describing positions and counts of all scene elements
  */
 export interface SceneState {
-  arbiterPos: 0 | 1 | 2; // 0=near human, 1=center, 2=near spellbook
+  arbiterPos: -1 | 0 | 1 | 2 | 3; // -1=off-screen, 0=near human, 1=center, 2=by cauldron, 3=by fire (start)
   demonCount: number; // 0-5
   focusTarget: 'human' | 'arbiter' | 'demon' | null;
   selectedCharacter: number; // Tile index 190-197 for selected human character
-  workingTarget: 'arbiter' | 'conjuring' | null; // Who is currently processing
-  hopFrame: boolean; // Alternates true/false for hop animation
-  bubbleFrame: boolean; // Alternates for bubble visibility
   humanCol: number; // Human character column position (0-6, default 1)
+
+  // Animation state (position-based, not identity-based)
+  activeHops: Map<string, HopState>; // key = "row,col"
+  bubbleVisible: boolean; // Cauldron smoke on/off
+  showSpellbook: boolean; // Arbiter's spellbook visibility
 }
 
 /**
@@ -122,14 +133,16 @@ function getTileRender(
  */
 export function createInitialSceneState(): SceneState {
   return {
-    arbiterPos: 0,
+    arbiterPos: 3, // Start by fire (row 3), walks to human when first message ready
     demonCount: 0,
     focusTarget: null,
     selectedCharacter: TILE.HUMAN_1,
-    workingTarget: null,
-    hopFrame: false,
-    bubbleFrame: false,
     humanCol: 1, // Default position (after entry animation)
+
+    // Animation state
+    activeHops: new Map(),
+    bubbleVisible: false,
+    showSpellbook: false,
   };
 }
 
@@ -150,10 +163,25 @@ export function createInitialSceneState(): SceneState {
  * - Spellbook appears to the left of arbiter when at position 2
  */
 export function createScene(state: SceneState): TileSpec[][] {
-  const { arbiterPos, demonCount, selectedCharacter, workingTarget, bubbleFrame, humanCol } = state;
-  const arbiterCol = 2 + arbiterPos;
-  // When arbiter is at position 2 (near spellbook), move down one row (next to campfire)
-  const arbiterRow = arbiterPos === 2 ? 3 : 2;
+  const { arbiterPos, demonCount, selectedCharacter, humanCol, bubbleVisible, showSpellbook } = state;
+  // arbiterPos -1 means off-screen (not visible)
+  const arbiterVisible = arbiterPos >= 0;
+
+  // Position mapping:
+  // Pos 3: row 3, col 4 (by fire - starting position)
+  // Pos 2: row 2, col 4 (moved up, by cauldron)
+  // Pos 1: row 2, col 3 (center)
+  // Pos 0: row 2, col 2 (near human)
+  let arbiterCol = -1;
+  let arbiterRow = 2;
+  if (arbiterVisible) {
+    switch (arbiterPos) {
+      case 0: arbiterCol = 2; arbiterRow = 2; break;
+      case 1: arbiterCol = 3; arbiterRow = 2; break;
+      case 2: arbiterCol = 4; arbiterRow = 2; break;
+      case 3: arbiterCol = 4; arbiterRow = 3; break;
+    }
+  }
 
   const scene: TileSpec[][] = [];
 
@@ -182,9 +210,9 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = selectedCharacter;
       }
 
-      // Spellbook appears below the arbiter when at position 2 (col 4)
-      // Arbiter is at row 3 when position 2; spellbook at row 4, col 4 (directly below)
-      if (arbiterPos === 2 && row === 4 && col === 4) {
+      // Spellbook at row 4, col 4 (one down and left from campfire)
+      // Shows when explicitly set (during arbiter's working position)
+      if (showSpellbook && row === 4 && col === 4) {
         tile = TILE.SPELLBOOK;
       }
 
@@ -193,8 +221,8 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = TILE.CAULDRON;
       }
 
-      // Smoke/bubbles above cauldron when working and bubbleFrame is true
-      if (workingTarget && bubbleFrame && row === 1 && col === 5) {
+      // Smoke/bubbles above cauldron when bubbleVisible is true
+      if (bubbleVisible && row === 1 && col === 5) {
         tile = TILE.SMOKE;
       }
 
@@ -203,10 +231,9 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = TILE.CAMPFIRE;
       }
 
-      // Arbiter - faces left when near human (pos 0), faces right when at spellbook (pos 2)
-      if (row === arbiterRow && col === arbiterCol) {
-        const facingHuman = arbiterPos === 0;
-        tile = { tile: TILE.ARBITER, mirrored: facingHuman };
+      // Arbiter - only draw if visible (arbiterPos >= 0)
+      if (arbiterVisible && row === arbiterRow && col === arbiterCol) {
+        tile = TILE.ARBITER;
       }
 
       // Demons based on count (spawn in order)
@@ -231,30 +258,18 @@ export function createScene(state: SceneState): TileSpec[][] {
 
 /**
  * Render the scene to an ANSI string
+ *
+ * @param tileset - The loaded tileset
+ * @param scene - The tile grid from createScene
+ * @param activeHops - Map of "row,col" -> HopState for positions that should hop
  */
 export function renderScene(
   tileset: Tileset,
   scene: TileSpec[][],
-  workingTarget: 'arbiter' | 'conjuring' | null = null,
-  hopFrame: boolean = false
+  activeHops: Map<string, HopState> = new Map()
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
-
-  // Scan scene for arbiter position and demon count (needed for hop animation)
-  let arbiterCol = 3; // Default center
-  let demonCount = 0;
-  for (let row = 0; row < scene.length; row++) {
-    for (let col = 0; col < scene[row].length; col++) {
-      const tileSpec = scene[row][col];
-      if (typeof tileSpec === 'object' && tileSpec.tile === TILE.ARBITER) {
-        arbiterCol = col;
-      }
-      if (typeof tileSpec === 'number' && tileSpec >= TILE.DEMON_1 && tileSpec <= TILE.DEMON_5) {
-        demonCount++;
-      }
-    }
-  }
 
   const renderedTiles: string[][][] = [];
 
@@ -277,19 +292,8 @@ export function renderScene(
     renderedTiles.push(renderedRow);
   }
 
-  // Determine which tile position should hop based on workingTarget
-  let hopTilePos: { row: number; col: number } | null = null;
-  if (workingTarget && hopFrame) {
-    if (workingTarget === 'arbiter') {
-      // Arbiter is at row 2, col from scene scan
-      hopTilePos = { row: 2, col: arbiterCol };
-    } else if (workingTarget === 'conjuring' && demonCount > 0) {
-      // First demon is at row 2, col 6
-      hopTilePos = { row: 2, col: 6 };
-    }
-  }
-
   // Build output string
+  // Hop detection now uses activeHops map - check if position is hopping and in "up" frame
   // When hopping, we need to shift the hopping tile up by 1 row
   // This means: at the row above, we show the bottom row of the hopping tile
   // and at the tile's normal position, we show rows shifted up
@@ -298,8 +302,15 @@ export function renderScene(
     for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
       let line = '';
       for (let tileCol = 0; tileCol < scene[tileRow].length; tileCol++) {
-        const isHoppingTile = hopTilePos && hopTilePos.row === tileRow && hopTilePos.col === tileCol;
-        const isTileAboveHopping = hopTilePos && hopTilePos.row === tileRow + 1 && hopTilePos.col === tileCol;
+        // Check if this position is hopping (and in "up" frame)
+        const hopKey = `${tileRow},${tileCol}`;
+        const hopState = activeHops.get(hopKey);
+        const isHoppingTile = hopState && hopState.frameInHop === 0;
+
+        // Check if tile above is hopping (for the overflow effect)
+        const hopKeyBelow = `${tileRow + 1},${tileCol}`;
+        const hopStateBelow = activeHops.get(hopKeyBelow);
+        const isTileAboveHopping = hopStateBelow && hopStateBelow.frameInHop === 0;
 
         if (isHoppingTile) {
           // For the hopping tile, show the row below (shifted up)
