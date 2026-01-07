@@ -83,6 +83,7 @@ interface TUIState {
 
   // Animation state
   animationFrame: number;
+  blinkCycle: number; // Slower counter for chat blink (increments every animation cycle)
   waitingFor: WaitingState;
 
   // Exit confirmation state
@@ -101,6 +102,8 @@ interface RedrawTracker {
   lastContextPercent: number;
   lastTool: string | null;
   lastWaitingFor: WaitingState;
+  lastChatWaitingFor: WaitingState;
+  lastChatAnimFrame: number;
 }
 
 // ============================================================================
@@ -120,7 +123,7 @@ let fillerRowCache: Map<string, string[]> = new Map();
 const ANIMATION_INTERVAL = 250; // ms
 
 // Debug log file (temporary, cleared each session)
-const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', '.arbiter.tmp.log');
+const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
 
 // Colors
 const COLORS = {
@@ -221,6 +224,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     currentTool: null,
     toolCallCount: 0,
     animationFrame: 0,
+    blinkCycle: 0,
     waitingFor: 'none',
     pendingExit: false,
   };
@@ -235,6 +239,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     lastContextPercent: -1,
     lastTool: null,
     lastWaitingFor: 'none',
+    lastChatWaitingFor: 'none',
+    lastChatAnimFrame: -1,
   };
 
   // Callbacks
@@ -366,11 +372,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   function drawChat(force: boolean = false) {
     const scrollChanged = state.scrollOffset !== tracker.lastScrollOffset;
     const messagesChanged = state.messages.length !== tracker.lastMessageCount;
+    const waitingChanged = state.waitingFor !== tracker.lastChatWaitingFor;
+    // Only track blink cycle changes when waiting (for slower blinking effect)
+    const blinkChanged =
+      state.waitingFor !== 'none' &&
+      state.blinkCycle !== tracker.lastChatAnimFrame;
 
-    if (!force && !scrollChanged && !messagesChanged) return;
+    if (!force && !scrollChanged && !messagesChanged && !waitingChanged && !blinkChanged) return;
 
     tracker.lastScrollOffset = state.scrollOffset;
     tracker.lastMessageCount = state.messages.length;
+    tracker.lastChatWaitingFor = state.waitingFor;
+    tracker.lastChatAnimFrame = state.blinkCycle;
 
     const layout = getLayout();
     const visibleLines = layout.chatArea.height;
@@ -394,6 +407,25 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       }
       // Add blank line between messages (but not after the last one)
       if (i < state.messages.length - 1) {
+        renderedLines.push({ text: '', color: COLORS.reset });
+      }
+    }
+
+    // Add working indicator when waiting for a response
+    if (state.waitingFor !== 'none') {
+      // Add blank line before indicator if there are messages
+      if (renderedLines.length > 0) {
+        renderedLines.push({ text: '', color: COLORS.reset });
+      }
+      // Blinking effect: show/hide based on blink cycle (~2 seconds on/off)
+      const showIndicator = state.blinkCycle % 2 === 0;
+      if (showIndicator) {
+        const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
+        const dots = '.'.repeat((state.blinkCycle % 3) + 1);
+        const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
+        renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
+      } else {
+        // Keep the space but don't show text (smooth blinking)
         renderedLines.push({ text: '', color: COLORS.reset });
       }
     }
@@ -955,11 +987,16 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   function startAnimation() {
     animationInterval = setInterval(() => {
       state.animationFrame = (state.animationFrame + 1) % 8;
+      // Increment blink cycle every full animation cycle (for slower chat blink)
+      if (state.animationFrame === 0) {
+        state.blinkCycle = (state.blinkCycle + 1) % 8;
+      }
 
       // Tick hop animations and redraw if any are active
       const hasHops = tickHops();
       if (hasHops || state.waitingFor !== 'none') {
         drawTiles();
+        drawChat(); // Update chat working indicator
       }
 
       // Always update status (for the dots animation)
@@ -1342,6 +1379,15 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     state.sceneState.bubbleVisible = true;
     drawTiles(true);
     drawStatus();
+
+    // Auto-scroll to show the working indicator
+    const layout = getLayout();
+    const totalLines =
+      state.messages.reduce((acc, msg) => {
+        return acc + getMessageLineCount(msg, layout.chatArea.width);
+      }, 0) + 2; // +2 for blank line and indicator
+    state.scrollOffset = Math.max(0, totalLines - layout.chatArea.height);
+    drawChat(true);
   }
 
   function stopWaiting(): void {
@@ -1351,6 +1397,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     state.sceneState.bubbleVisible = false;
     drawTiles(true);
     drawStatus();
+    drawChat(true); // Clear the working indicator
   }
 
   return {
