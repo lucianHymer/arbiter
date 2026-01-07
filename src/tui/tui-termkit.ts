@@ -252,6 +252,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (!force && state.animationFrame === tracker.lastTileFrame) return;
     tracker.lastTileFrame = state.animationFrame;
 
+    // Skip drawing if log viewer is open (but state still updates)
+    if (inLogViewer) return;
+
     if (!state.tileset) return;
     const layout = getLayout();
 
@@ -714,16 +717,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     drawLogViewer();
 
-    // Stop animation while in log viewer
-    stopAnimation();
-
     // Handle log viewer keys
+    // (animation keeps running in background so state stays current)
     const logKeyHandler = (key: string) => {
       if (key === 'q' || key === 'ESCAPE') {
         // Close log viewer
         term.off('key', logKeyHandler);
         inLogViewer = false;
-        startAnimation();
         fullDraw();
         return;
       }
@@ -732,7 +732,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         // Close log viewer and show exit prompt
         term.off('key', logKeyHandler);
         inLogViewer = false;
-        startAnimation();
         fullDraw();
         state.pendingExit = true;
         drawStatus(true);
