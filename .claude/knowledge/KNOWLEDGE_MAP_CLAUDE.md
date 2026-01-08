@@ -18,3 +18,5 @@ Quick reference for Claude to load relevant knowledge.
 
 @gotchas/arbiter-echo-bug.md
 @gotchas/ink-ansi-clearing.md
+@gotchas/forestintro-exit-mechanism.md
+@gotchas/forestintro-dialogue-positioning.md
