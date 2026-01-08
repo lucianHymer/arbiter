@@ -78,15 +78,22 @@ interface MessageRow {
   running_sum_input: number;
   running_sum_output: number;
 
+  // Combined metric (cache_read + cache_create)
+  combined_rc: number;           // This message's cache_read + cache_create
+  running_max_combined_rc: number; // Max(combined_rc) seen so far
+  first_combined_rc: number;     // First message's combined_rc (for growth calc)
+
   // Calculated context (various formulas)
   formula_max_only: number;
   formula_max_plus_sums: number;
   formula_create_plus_sums: number;
+  formula_combined_growth: number; // NEW: max(r+c) - first(r+c)
 
   // Percentages
   pct_max_only: number;
   pct_max_plus_sums: number;
   pct_create_plus_sums: number;
+  pct_combined_growth: number;
 
   // API call count
   unique_api_calls: number;
@@ -133,9 +140,14 @@ interface AnalysisResult {
     final_sum_cache_create: number;
     final_sum_input: number;
     final_sum_output: number;
+    // Combined metric tracking
+    first_combined_rc: number;
+    final_max_combined_rc: number;
+    // Calculated formulas
     calculated_max_only: number;
     calculated_max_plus_sums: number;
     calculated_create_plus_sums: number;
+    calculated_combined_growth: number; // NEW: max(r+c) - first(r+c)
     actual_total?: number;
     actual_messages?: number;
   };
@@ -293,6 +305,10 @@ class ContextAnalyzer {
   private sumInput = 0;
   private sumOutput = 0;
 
+  // Combined metric tracking: cache_read + cache_create
+  private firstCombinedRC = 0;   // First message's (cache_read + cache_create)
+  private maxCombinedRC = 0;     // Max(cache_read + cache_create) seen
+
   private messages: MessageRow[] = [];
   private seq = 0;
   private startTime: number;
@@ -411,16 +427,26 @@ class ContextAnalyzer {
     const input = usage.input_tokens || 0;
     const output = usage.output_tokens || 0;
 
+    // Combined metric: cache_read + cache_create
+    const combinedRC = cacheRead + cacheCreate;
+
     // Update running totals
     this.maxCacheRead = Math.max(this.maxCacheRead, cacheRead);
     this.sumCacheCreate += cacheCreate;
     this.sumInput += input;
     this.sumOutput += output;
 
+    // Track combined metric
+    if (this.firstCombinedRC === 0) {
+      this.firstCombinedRC = combinedRC; // First message's combined value
+    }
+    this.maxCombinedRC = Math.max(this.maxCombinedRC, combinedRC);
+
     // Calculate formulas
     const formulaMaxOnly = this.maxCacheRead;
     const formulaMaxPlusSums = this.maxCacheRead + this.sumInput + this.sumOutput;
     const formulaCreatePlusSums = this.sumCacheCreate + this.sumInput + this.sumOutput;
+    const formulaCombinedGrowth = this.maxCombinedRC - this.firstCombinedRC; // NEW
 
     const row: MessageRow = {
       seq: ++this.seq,
@@ -440,13 +466,20 @@ class ContextAnalyzer {
       running_sum_input: this.sumInput,
       running_sum_output: this.sumOutput,
 
+      // Combined metric tracking
+      combined_rc: combinedRC,
+      running_max_combined_rc: this.maxCombinedRC,
+      first_combined_rc: this.firstCombinedRC,
+
       formula_max_only: formulaMaxOnly,
       formula_max_plus_sums: formulaMaxPlusSums,
       formula_create_plus_sums: formulaCreatePlusSums,
+      formula_combined_growth: formulaCombinedGrowth,
 
       pct_max_only: (formulaMaxOnly / MAX_CONTEXT_TOKENS) * 100,
       pct_max_plus_sums: (formulaMaxPlusSums / MAX_CONTEXT_TOKENS) * 100,
       pct_create_plus_sums: (formulaCreatePlusSums / MAX_CONTEXT_TOKENS) * 100,
+      pct_combined_growth: (formulaCombinedGrowth / MAX_CONTEXT_TOKENS) * 100,
 
       unique_api_calls: this.seenMsgIds.size,
 
@@ -456,8 +489,8 @@ class ContextAnalyzer {
     this.messages.push(row);
 
     // Log progress
-    console.log(`  [${row.seq}] ${msgId.slice(0, 12)}... cache_read=${cacheRead}, create=${cacheCreate}, in=${input}, out=${output}`);
-    console.log(`       max_cache_read=${this.maxCacheRead}, formula_max+sums=${formulaMaxPlusSums} (${row.pct_max_plus_sums.toFixed(1)}%)`);
+    console.log(`  [${row.seq}] ${msgId.slice(0, 12)}... r=${cacheRead}, c=${cacheCreate}, r+c=${combinedRC}`);
+    console.log(`       max(r+c)=${this.maxCombinedRC}, growth=${formulaCombinedGrowth}`);
 
     return row;
   }
@@ -554,9 +587,14 @@ class ContextAnalyzer {
         final_sum_cache_create: this.sumCacheCreate,
         final_sum_input: this.sumInput,
         final_sum_output: this.sumOutput,
+        // Combined metric tracking
+        first_combined_rc: this.firstCombinedRC,
+        final_max_combined_rc: this.maxCombinedRC,
+        // Calculated formulas
         calculated_max_only: this.maxCacheRead,
         calculated_max_plus_sums: this.maxCacheRead + this.sumInput + this.sumOutput,
         calculated_create_plus_sums: this.sumCacheCreate + this.sumInput + this.sumOutput,
+        calculated_combined_growth: this.maxCombinedRC - this.firstCombinedRC,
         actual_total: final.total_tokens,
         actual_messages: final.messages_tokens,
       },
@@ -574,6 +612,9 @@ class ContextAnalyzer {
       sumCacheCreate: this.sumCacheCreate,
       sumInput: this.sumInput,
       sumOutput: this.sumOutput,
+      firstCombinedRC: this.firstCombinedRC,
+      maxCombinedRC: this.maxCombinedRC,
+      combinedGrowth: this.maxCombinedRC - this.firstCombinedRC,
       uniqueApiCalls: this.seenMsgIds.size,
     };
   }
@@ -587,9 +628,10 @@ function toCSV(messages: MessageRow[]): string {
   const headers = [
     'seq', 'timestamp', 'elapsed_ms', 'message_id', 'uuid', 'type',
     'cache_read', 'cache_create', 'input', 'output',
+    'combined_rc', 'running_max_combined_rc', 'first_combined_rc',
     'running_max_cache_read', 'running_sum_cache_create', 'running_sum_input', 'running_sum_output',
-    'formula_max_only', 'formula_max_plus_sums', 'formula_create_plus_sums',
-    'pct_max_only', 'pct_max_plus_sums', 'pct_create_plus_sums',
+    'formula_max_only', 'formula_max_plus_sums', 'formula_create_plus_sums', 'formula_combined_growth',
+    'pct_max_only', 'pct_max_plus_sums', 'pct_create_plus_sums', 'pct_combined_growth',
     'unique_api_calls', 'text_preview'
   ];
 
@@ -604,6 +646,9 @@ function toCSV(messages: MessageRow[]): string {
     m.cache_create,
     m.input,
     m.output,
+    m.combined_rc,
+    m.running_max_combined_rc,
+    m.first_combined_rc,
     m.running_max_cache_read,
     m.running_sum_cache_create,
     m.running_sum_input,
@@ -611,9 +656,11 @@ function toCSV(messages: MessageRow[]): string {
     m.formula_max_only,
     m.formula_max_plus_sums,
     m.formula_create_plus_sums,
+    m.formula_combined_growth,
     m.pct_max_only.toFixed(2),
     m.pct_max_plus_sums.toFixed(2),
     m.pct_create_plus_sums.toFixed(2),
+    m.pct_combined_growth.toFixed(2),
     m.unique_api_calls,
     `"${m.text_preview.replace(/"/g, '""')}"`,
   ].join(','));
@@ -638,11 +685,11 @@ function printSummary(result: AnalysisResult): void {
   console.log(`sum(input): ${result.summary.final_sum_input}`);
   console.log(`sum(output): ${result.summary.final_sum_output}`);
 
-  console.log('\n--- Formula Comparison ---');
+  console.log('\n--- Combined Metric (cache_read + cache_create) ---');
   const s = result.summary;
-  console.log(`max_only:           ${s.calculated_max_only.toLocaleString().padStart(10)} (${(s.calculated_max_only / MAX_CONTEXT_TOKENS * 100).toFixed(1)}%)`);
-  console.log(`max + sum(in+out):  ${s.calculated_max_plus_sums.toLocaleString().padStart(10)} (${(s.calculated_max_plus_sums / MAX_CONTEXT_TOKENS * 100).toFixed(1)}%)`);
-  console.log(`create + sum(in+out): ${s.calculated_create_plus_sums.toLocaleString().padStart(8)} (${(s.calculated_create_plus_sums / MAX_CONTEXT_TOKENS * 100).toFixed(1)}%)`);
+  console.log(`first(r+c):             ${s.first_combined_rc.toLocaleString().padStart(10)}`);
+  console.log(`max(r+c):               ${s.final_max_combined_rc.toLocaleString().padStart(10)}`);
+  console.log(`growth:                 ${s.calculated_combined_growth.toLocaleString().padStart(10)}`);
 
   if (result.final) {
     console.log('\n--- Actual /context Output ---');
@@ -650,39 +697,42 @@ function printSummary(result: AnalysisResult): void {
     console.log(`Messages: ${(result.final.messages_tokens || 0).toLocaleString().padStart(10)}`);
     console.log(`System:   ${(result.final.system_tokens || 0).toLocaleString().padStart(10)}`);
 
-    console.log('\n--- Accuracy Check ---');
-    const actual = result.final.total_tokens || 0;
-    if (actual > 0) {
-      const diffMaxOnly = s.calculated_max_only - actual;
-      const diffMaxSums = s.calculated_max_plus_sums - actual;
-      const diffCreate = s.calculated_create_plus_sums - actual;
-
-      console.log(`max_only vs actual:      ${diffMaxOnly >= 0 ? '+' : ''}${diffMaxOnly.toLocaleString()} (${(diffMaxOnly / actual * 100).toFixed(1)}%)`);
-      console.log(`max+sums vs actual:      ${diffMaxSums >= 0 ? '+' : ''}${diffMaxSums.toLocaleString()} (${(diffMaxSums / actual * 100).toFixed(1)}%)`);
-      console.log(`create+sums vs actual:   ${diffCreate >= 0 ? '+' : ''}${diffCreate.toLocaleString()} (${(diffCreate / actual * 100).toFixed(1)}%)`);
-    }
-
-    // Calculate formulas
+    // THE NEW FORMULA: baseline + max(r+c) - first(r+c)
     if (result.baseline && result.messages.length > 0) {
       const baselineTotal = result.baseline.total_tokens;
-      const firstCacheCreate = result.messages[0].cache_create;
       const actual = result.final.total_tokens || 0;
 
-      console.log('\n--- THE FORMULA (baseline + cache_create_after_first + in + out) ---');
+      console.log('\n' + '='.repeat(60));
+      console.log('★ THE FORMULA: baseline + max(r+c) - first(r+c) + sum(i+o) ★');
+      console.log('='.repeat(60));
       console.log(`Baseline total:         ${baselineTotal.toLocaleString().padStart(10)}`);
-      console.log(`sum(cache_create):      ${s.final_sum_cache_create.toLocaleString().padStart(10)}`);
-      console.log(`First cache_create:     ${firstCacheCreate.toLocaleString().padStart(10)} (subtract this)`);
+      console.log(`max(cache_read+create): ${s.final_max_combined_rc.toLocaleString().padStart(10)}`);
+      console.log(`first(cache_read+create): ${s.first_combined_rc.toLocaleString().padStart(9)} (subtract)`);
       console.log(`sum(input):             ${s.final_sum_input.toLocaleString().padStart(10)}`);
       console.log(`sum(output):            ${s.final_sum_output.toLocaleString().padStart(10)}`);
 
-      const formula = baselineTotal + (s.final_sum_cache_create - firstCacheCreate) + s.final_sum_input + s.final_sum_output;
-      const diff = formula - actual;
-      const pctError = (diff / actual * 100);
+      const formulaNew = baselineTotal + s.calculated_combined_growth + s.final_sum_input + s.final_sum_output;
+      const diffNew = formulaNew - actual;
+      const pctErrorNew = (diffNew / actual * 100);
 
       console.log(`─────────────────────────────────────`);
-      console.log(`Calculated:             ${formula.toLocaleString().padStart(10)}`);
+      console.log(`Calculated:             ${formulaNew.toLocaleString().padStart(10)}`);
       console.log(`Actual (/context):      ${actual.toLocaleString().padStart(10)}`);
-      console.log(`Difference:             ${diff >= 0 ? '+' : ''}${diff.toLocaleString().padStart(9)} (${pctError >= 0 ? '+' : ''}${pctError.toFixed(2)}%)`);
+      console.log(`Difference:             ${diffNew >= 0 ? '+' : ''}${diffNew.toLocaleString().padStart(9)} (${pctErrorNew >= 0 ? '+' : ''}${pctErrorNew.toFixed(2)}%)`);
+
+      // Also show the old formula for comparison
+      console.log('\n--- Old Formula Comparison ---');
+      const firstCacheCreate = result.messages[0].cache_create;
+      const formulaOld = baselineTotal + (s.final_sum_cache_create - firstCacheCreate) + s.final_sum_input + s.final_sum_output;
+      const diffOld = formulaOld - actual;
+      const pctErrorOld = (diffOld / actual * 100);
+      console.log(`Old (baseline + sum(create) - first(create) + in + out):`);
+      console.log(`  Calculated: ${formulaOld.toLocaleString().padStart(10)}, Error: ${diffOld >= 0 ? '+' : ''}${pctErrorOld.toFixed(2)}%`);
+
+      // Summary comparison
+      console.log('\n--- Formula Accuracy Comparison ---');
+      console.log(`NEW (baseline + max(r+c) - first(r+c)):  ${Math.abs(pctErrorNew).toFixed(2)}% error`);
+      console.log(`OLD (baseline + Σcache_create - first): ${Math.abs(pctErrorOld).toFixed(2)}% error`);
     }
   }
 

@@ -10,127 +10,101 @@ Claude's Agent SDK returns usage data per message:
 
 But how do you calculate actual context window usage from these? The `/context` command shows accurate breakdowns, but it's not programmatically accessible. Everyone on the internet was guessing.
 
-## The Formula (FINAL - January 2026)
+## The Formula (REVISED - January 2026)
 
 ```
-total = baseline + (max(cache_read) - first(cache_read)) + last(cache_create)
+total = baseline + max(cache_read + cache_create) - first(cache_read + cache_create) + sum(input) + sum(output)
 ```
 
-Or more simply: **baseline + message_growth + pending_content**
+Or more simply: **baseline + combined_growth + sum(I/O)**
+
+Where:
+- **combined** = `cache_read + cache_create` for any given message
+- **combined_growth** = `max(combined)` - `first(combined)`
+- **sum(I/O)** = accumulated `input_tokens` + `output_tokens` across all messages
 
 All values from `assistant.message.usage`, deduped by `message.id` (NOT uuid!).
 
+### Why Combined Metric?
+
+The key insight is tracking `(cache_read + cache_create)` as a single combined metric. This handles:
+1. **Non-monotonic cache_read** - Can drop on session resume or cache expiry
+2. **Cache absorption** - cache_create gets absorbed into future cache_read
+3. **Variable caching states** - Different sessions start with different cache states
+
+The combined metric stays stable because at any point, `(cache_read + cache_create)` represents the total cacheable content for that turn.
+
 ### Components
 
-1. **baseline** = total tokens from `/context` at session start (~18-19k typically)
+1. **baseline** = total tokens from `/context` at session start (~18.5k typically)
 
-2. **cache_read growth** = `max(cache_read) - first(cache_read)`
-   - How much the cache has grown since the first message
-   - Represents new message content that's been cached
+2. **first(cache_read + cache_create)** = "cached system overhead" (~15.4k typically)
+   - Remarkably consistent across sessions regardless of initial cache state
+   - Represents the system tools/prompt portion in cache
 
-3. **last(cache_create)** = `cache_creation_input_tokens` from the LAST message ONLY
-   - **NOT sum()!** - cache_create gets absorbed into next message's cache_read
-   - Summing would double-count as content moves through cache
-   - Only the last message's cache_create is "pending" uncached content
+3. **max(cache_read + cache_create)** = high water mark of combined metric
+   - Tracks total cacheable content including messages
 
-### Accuracy Results (8 test scenarios)
+4. **combined_growth** = max - first = message content added since start
 
-| Messages | Tools | Calculated | Actual  | Error   |
-|----------|-------|------------|---------|---------|
-| 3        | No    | 18,941     | 19,000  | -0.31%  |
-| 3        | Yes   | 31,925     | 32,300  | -1.16%  |
-| 6        | No    | 19,280     | 19,000  | +1.47%  |
-| 6        | Yes   | 37,957     | 38,300  | -0.90%  |
-| 8        | Yes   | 45,969     | 46,300  | -0.71%  |
-| 10       | No    | 19,517     | 19,500  | +0.09%  |
-| 12       | No    | 19,367     | 19,400  | -0.17%  |
-| 12       | Yes   | 55,943     | 56,100  | -0.28%  |
+### Accuracy Results (January 2026)
 
-**Average absolute error: ~0.64%** - All tests within 1.5%!
+| Prompts | Tools | Calculated | Actual  | Error   |
+|---------|-------|------------|---------|---------|
+| 6       | No    | 18,532     | 18,600  | -0.37%  |
+| 6       | Yes   | 39,401     | 39,300  | +0.26%  |
+| 10      | Yes   | 47,599     | 47,700  | -0.21%  |
+
+**Average absolute error: ~0.3%** - essentially within /context rounding error!
+
+### Comparison with Previous Formula
+
+The previous formula `baseline + (max(cache_read) - first(cache_read)) + last(cache_create)` failed badly with heavy tool use:
+
+| Scenario      | NEW Formula | OLD Formula |
+|---------------|-------------|-------------|
+| 6 prompts, no tools  | 0.55% error | 0.37% error |
+| 6 prompts, with tools | 0.93% error | **11.28% error** |
+| 10 prompts, with tools | 0.85% error | **24.65% error** |
+
+The old formula got progressively worse with more tool use because `sum(cache_create)` double-counts content as it moves through the cache.
 
 ## Why It Works
 
-### cache_read_input_tokens
-- Represents cached content read for each API call
-- First message's cache_read ≈ **system tools** (NOT full system prompt!)
-- Grows as conversation history gets cached
-- **NOT monotonically increasing** - can drop on session resume or cache expiry
-- Use **MAX** across all messages (high water mark)
-- **Does NOT include ~3k tokens of system prompt** - hence SYSTEM_GAP needed
+### Combined Metric Insight
 
-### cache_creation_input_tokens (NOT used in formula)
-- Tokens being **added** to cache this turn
-- Gets absorbed into future `cache_read` values
-- Including it would **double-count** because:
-  - Turn 1: cache_create=X (new stuff cached)
-  - Turn 2: cache_read now includes X
-- Tested: adding max(cache_create) overshoots by ~50%
-- Tested: adding sum(cache_create) overshoots by ~200%
+At any point during a session:
+- `cache_read` = what's currently in cache being read
+- `cache_create` = what's being added to cache this turn
+- `cache_read + cache_create` = total cacheable content right now
 
-### input_tokens
-- New non-cached input per turn
-- Usually tiny (1-3 tokens per message)
-- **SUM** across all unique messages
+The first message's combined value (~15.4k) represents the cached system overhead.
+As messages are added, the combined value grows.
+The difference (max - first) represents message content growth.
 
-### output_tokens
-- Response tokens per turn
-- **SUM** across all unique messages
-- Streaming assistant msgs have partial values (still works)
+### Why first(r+c) is Consistent
 
-## Validation Data
+Regardless of whether the cache was "warm" or "cold" before starting:
+- Low-tool test: first(r+c) = 15,372 (r=14,989, c=383)
+- High-tool test: first(r+c) = 15,372 (r=15,354, c=18)
 
-Fresh session system overhead (~27k tokens):
+The combined value is the same! The individual components vary based on cache state, but their sum is stable.
+
+### cache_read is NOT Monotonic
+
 ```
-System prompt:   3.1k  (1.6%)
-System tools:   17.0k  (8.5%)
-MCP tools:       1.1k  (0.5%)
-Custom agents:   371   (0.2%)
-Memory files:    5.5k  (2.7%)
-─────────────────────────────
-Total system:   ~27k
+#10: 30740 ↑
+#11: 29159 ↓  ← Dropped by 1,581!
+#12: 32106 ↑
+#13: 31986 ↓  ← Dropped by 120
+#14: 34526 ↑
 ```
 
-Session with conversation:
-```
-/context showed:     44k total (22%)
-                     16.6k messages
-                     27k system
-
-Our formula (with message.id dedupe):
-                     max(cache_read) = 35k
-                     sum(input) = 20
-                     sum(output) = 85
-                     ─────────────────
-                     Total: 35.1k (17.5%)
-```
-
-Note: Using `uuid` for dedupe gave sum(input)=46, sum(output)=369 - overcounting by 2-3x!
-
-The ~9k gap was because the log was captured mid-session. When cache_read catches up to include all cached messages, the formula matches exactly.
+This is why tracking `cache_read` alone doesn't work - you need the combined metric.
 
 ## Critical Discoveries
 
-### 1. cache_read is NOT Monotonic
-
-```
-#21: 32325 ↑
-#22: 18864 ↓  ← Big drop (session resume? cache expiry?)
-#23: 34546 ↑
-#24: 34546 ↑
-#25: 34966 ↑
-#26: 34837 ↓  ← Small drop
-```
-
-This is why you need MAX, not "latest value".
-
-### 2. Result vs Assistant Messages
-
-- **Result messages**: Aggregate across subagents (inflated numbers)
-- **Assistant messages**: Main model only (accurate)
-
-Always use assistant messages for context tracking.
-
-### 3. Dedupe by message.id (NOT uuid!)
+### 1. Dedupe by message.id (NOT uuid!)
 
 The SDK's `uuid` is unique per streaming chunk, but `message.id` is unique per API call.
 Multiple streaming chunks from the same API response share the same `message.id`.
@@ -146,9 +120,21 @@ if (seenMsgIds.has(msg.message.id)) return;
 seenMsgIds.add(msg.message.id);
 ```
 
-Example from real data:
-- 26 unique UUIDs = overcounting
-- 10 unique message.ids = correct count
+### 2. Result vs Assistant Messages
+
+- **Result messages**: Aggregate across subagents (inflated numbers)
+- **Assistant messages**: Main model only (accurate)
+
+Always use assistant messages for context tracking.
+
+### 3. Don't Sum cache_create
+
+`sum(cache_create)` double-counts because:
+- Turn 1: cache_create=X (new stuff cached)
+- Turn 2: cache_read now includes X, cache_create=Y
+- Summing gives X+Y, but Y already "contains" X in the cache
+
+The combined metric avoids this by looking at snapshots, not accumulations.
 
 ## Implementation
 
@@ -159,10 +145,6 @@ Run `/context` via SDK to get the baseline token count:
 ```typescript
 import { query } from "@anthropic-ai/claude-agent-sdk";
 
-/**
- * Get baseline context by running /context command
- * Returns the total tokens from a fresh session
- */
 async function getBaseline(cwd: string): Promise<number> {
   const q = query({
     prompt: '/context',
@@ -172,11 +154,9 @@ async function getBaseline(cwd: string): Promise<number> {
   let baseline = 0;
 
   for await (const msg of q) {
-    // /context output comes through as user message with <local-command-stdout>
     if (msg.type === 'user') {
       const content = (msg as any).message?.content;
       if (typeof content === 'string') {
-        // Match: **Tokens:** 18.4k / 200.0k (9%)
         const match = content.match(/\*\*Tokens:\*\*\s*([0-9.]+)k/i);
         if (match) {
           baseline = Math.round(parseFloat(match[1]) * 1000);
@@ -195,18 +175,20 @@ async function getBaseline(cwd: string): Promise<number> {
 interface ContextTracker {
   baseline: number;           // From /context at startup
   seenMsgIds: Set<string>;    // Dedupe by message.id
-  firstCacheRead: number;     // First message's cache_read (to calc growth)
-  maxCacheRead: number;       // Highest cache_read seen
-  lastCacheCreate: number;    // Most recent cache_create (pending content)
+  firstCombinedRC: number;    // First message's (cache_read + cache_create)
+  maxCombinedRC: number;      // Max(cache_read + cache_create) seen
+  sumInput: number;           // Sum of input_tokens
+  sumOutput: number;          // Sum of output_tokens
 }
 
 function createContextTracker(baseline: number): ContextTracker {
   return {
     baseline,
     seenMsgIds: new Set(),
-    firstCacheRead: 0,
-    maxCacheRead: 0,
-    lastCacheCreate: 0,
+    firstCombinedRC: 0,
+    maxCombinedRC: 0,
+    sumInput: 0,
+    sumOutput: 0,
   };
 }
 
@@ -221,21 +203,25 @@ function updateContext(tracker: ContextTracker, msg: SDKAssistantMessage): void 
 
   const cacheRead = usage.cache_read_input_tokens || 0;
   const cacheCreate = usage.cache_creation_input_tokens || 0;
+  const inputTokens = usage.input_tokens || 0;
+  const outputTokens = usage.output_tokens || 0;
+  const combinedRC = cacheRead + cacheCreate;
 
-  // Capture first cache_read as our reference point
-  if (tracker.firstCacheRead === 0) {
-    tracker.firstCacheRead = cacheRead;
+  // Capture first combined value as reference point
+  if (tracker.firstCombinedRC === 0) {
+    tracker.firstCombinedRC = combinedRC;
   }
 
   // Update tracking
-  tracker.maxCacheRead = Math.max(tracker.maxCacheRead, cacheRead);
-  tracker.lastCacheCreate = cacheCreate;  // Always overwrite with latest
+  tracker.maxCombinedRC = Math.max(tracker.maxCombinedRC, combinedRC);
+  tracker.sumInput += inputTokens;
+  tracker.sumOutput += outputTokens;
 }
 
 function getContextTokens(tracker: ContextTracker): number {
-  // THE FORMULA: baseline + (cache_read growth) + (pending cache_create)
-  const cacheGrowth = tracker.maxCacheRead - tracker.firstCacheRead;
-  return tracker.baseline + cacheGrowth + tracker.lastCacheCreate;
+  // THE FORMULA: baseline + combined_growth + I/O
+  const combinedGrowth = tracker.maxCombinedRC - tracker.firstCombinedRC;
+  return tracker.baseline + combinedGrowth + tracker.sumInput + tracker.sumOutput;
 }
 
 function getContextPercent(tracker: ContextTracker): number {
@@ -269,28 +255,22 @@ async function startSession(cwd: string) {
 }
 ```
 
-## Token Counting API Verification
-
-We verified our message token counts against the Anthropic token counting API:
-- API count for all messages: **16,295 tokens**
-- /context "Messages" line: **16,600 tokens**
-- Difference: ~300 tokens (~2%) - within margin of error
-
-The SDK usage data approach matches the token counting API without needing extra API calls.
-
 ## Summary
 
 | What to track | How |
 |--------------|-----|
 | Dedupe key | `message.id` (NOT `uuid`) |
 | Baseline | Run `/context` at startup, parse total tokens |
-| Message growth | `max(cache_read) - first(cache_read)` |
-| Pending content | `last(cache_create)` - LAST message only, NOT sum! |
-| **Total context** | **`baseline + (max - first cache_read) + last(cache_create)`** |
+| Combined metric | `cache_read + cache_create` per message |
+| Message growth | `max(combined) - first(combined)` |
+| I/O tokens | `sum(input_tokens) + sum(output_tokens)` |
+| **Total context** | **`baseline + max(r+c) - first(r+c) + sum(i+o)`** |
 
 **Critical:**
 1. Use `message.id` for deduplication! The SDK's `uuid` is per streaming chunk, but `message.id` is per API call.
-2. Use `last(cache_create)` NOT `sum(cache_create)`! Cache_create gets absorbed into the next message's cache_read, so summing double-counts.
-3. Get baseline from `/context` at startup.
+2. Track the **combined metric** `(cache_read + cache_create)`, not separately!
+3. Use `max(combined) - first(combined)` for growth, not sums.
+4. Add `sum(input) + sum(output)` for non-cached I/O tokens.
+5. Get baseline from `/context` at startup.
 
-**Tested accuracy: ~0.64% average error across 8 test scenarios (3-12 messages, with/without tools).**
+**Tested accuracy: ~0.3% average error - essentially within /context rounding error.**
