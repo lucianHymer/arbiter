@@ -253,6 +253,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   let pendingArbiterMessage: string | null = null; // Message waiting for entrance to complete
   let arbiterWalkInterval: NodeJS.Timeout | null = null; // For walk animations
 
+  // Summon sequence state machine
+  // States: 'idle' (at human) → 'walking' (to cauldron) → 'ready' (can show demons) → 'dismissing' (walking back)
+  type SummonState = 'idle' | 'walking' | 'ready' | 'dismissing';
+  let summonState: SummonState = 'idle';
+  let pendingDemonSpawns: number[] = []; // Queue of demon numbers waiting to appear
+
   // ============================================================================
   // Drawing Functions (Strategy 5 - Minimal Redraws)
   // ============================================================================
@@ -1060,6 +1066,94 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }, 1000); // 1 second per step, 3 seconds for full walk
   }
 
+  // ============================================================================
+  // Summon Sequence Functions
+  // ============================================================================
+
+  /**
+   * Start the summon sequence: walk to cauldron, show spellbook, then process demon queue.
+   * Called when mode changes to 'arbiter_to_orchestrator'.
+   * Reuses animateArbiterWalk for the walking animation.
+   */
+  function startSummonSequence() {
+    if (summonState !== 'idle') return; // Already summoning or dismissing
+
+    summonState = 'walking';
+    animateArbiterWalk(2, () => {
+      // Walk complete - show spellbook after brief pause
+      setTimeout(() => {
+        state.sceneState.showSpellbook = true;
+        drawTiles(true);
+        summonState = 'ready';
+        // Process any demons that queued during the walk
+        processQueuedSpawns();
+      }, ANIMATION_INTERVAL);
+    });
+  }
+
+  /**
+   * Queue a demon to spawn. If already at cauldron (ready), shows immediately.
+   * If still walking, demon appears after walk + spellbook sequence completes.
+   */
+  function queueDemonSpawn(demonNumber: number) {
+    pendingDemonSpawns.push(demonNumber);
+
+    if (summonState === 'ready') {
+      // Already at cauldron with spellbook, process immediately
+      processQueuedSpawns();
+    } else if (summonState === 'idle') {
+      // Not at cauldron yet, start the sequence
+      startSummonSequence();
+    }
+    // If 'walking' or 'dismissing', demon will be processed when sequence completes
+  }
+
+  /**
+   * Process demons from the queue, showing them one at a time with a pause between each.
+   */
+  function processQueuedSpawns() {
+    if (summonState !== 'ready') return;
+    if (pendingDemonSpawns.length === 0) return;
+
+    const nextDemon = pendingDemonSpawns.shift()!;
+
+    // Brief pause, then show demon
+    setTimeout(() => {
+      state.sceneState.demonCount = nextDemon;
+      drawTiles(true);
+      // Process next demon if any (recursive with delay)
+      if (pendingDemonSpawns.length > 0) {
+        processQueuedSpawns();
+      }
+    }, ANIMATION_INTERVAL * 2); // ~500ms pause before each demon appears
+  }
+
+  /**
+   * Start the dismiss sequence: hide spellbook, clear demons, walk back to human.
+   * Called when orchestrators are disconnected or mode changes back.
+   */
+  function startDismissSequence() {
+    // Clear any pending spawns
+    pendingDemonSpawns = [];
+
+    // If already idle or dismissing, nothing to do
+    if (summonState === 'idle' || summonState === 'dismissing') return;
+
+    summonState = 'dismissing';
+
+    // Hide spellbook and clear demons immediately
+    state.sceneState.showSpellbook = false;
+    state.sceneState.demonCount = 0;
+    drawTiles(true);
+
+    // Walk back after brief pause
+    setTimeout(() => {
+      animateArbiterWalk(0, () => {
+        summonState = 'idle';
+      });
+    }, ANIMATION_INTERVAL);
+  }
+
   /**
    * Run the full entrance sequence:
    * 1. Human walks in from left (col 0 → 1)
@@ -1149,24 +1243,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       },
 
       onModeChange: (mode: AppState['mode']) => {
-        // Animate arbiter walking to new position with spellbook animation
+        // Use summon/dismiss sequences for coordinated animation
         if (mode === 'arbiter_to_orchestrator') {
-          // Going to work position: walk first, then show spellbook
-          animateArbiterWalk(2, () => {
-            // One frame delay, then show spellbook
-            setTimeout(() => {
-              state.sceneState.showSpellbook = true;
-              drawTiles(true);
-            }, ANIMATION_INTERVAL);
-          });
+          // Start walking to cauldron - demons will appear after walk + spellbook
+          startSummonSequence();
         } else {
-          // Leaving work position: hide spellbook first, then walk
-          state.sceneState.showSpellbook = false;
-          drawTiles(true);
-          // One frame delay, then start walking
-          setTimeout(() => {
-            animateArbiterWalk(0);
-          }, ANIMATION_INTERVAL);
+          // Leaving work position - hide spellbook, clear demons, walk back
+          startDismissSequence();
         }
       },
 
@@ -1195,16 +1278,17 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       },
 
       onOrchestratorSpawn: (orchestratorNumber: number) => {
-        state.sceneState.demonCount = orchestratorNumber;
-        drawTiles(true);
+        // Queue the demon to appear after walk + spellbook sequence completes
+        queueDemonSpawn(orchestratorNumber);
       },
 
       onOrchestratorDisconnect: () => {
-        state.sceneState.demonCount = 0;
+        // Run dismiss sequence (clears demons, hides spellbook, walks back)
+        startDismissSequence();
+        // Also clear orchestrator UI state
         state.orchestratorContextPercent = null;
         state.currentTool = null;
         state.toolCallCount = 0;
-        drawTiles(true);
         drawStatus();
       },
 
