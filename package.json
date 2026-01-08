@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test:headless": "tsx src/test-headless.ts"
+    "test:headless": "tsx src/test-headless.ts",
+    "analyze:context": "tsx src/context-analyzer.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "latest",

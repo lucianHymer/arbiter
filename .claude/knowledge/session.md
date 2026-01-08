@@ -1,23 +1,49 @@
-### [22:31] [gotcha] ForestIntro Exit Mechanism - Walk Off Screen
-**Details**: Updated ForestIntro-termkit.ts to require player walk OFF the screen to the right (x >= SCENE_WIDTH_TILES) to successfully exit, not just reach the rightmost walkable tile.
+### [14:54] [gotcha] SDK cache_read doesn't include full system overhead
+**Details**: The SDK's cache_read_input_tokens value from assistant.message.usage does NOT include the full system overhead. Testing shows:
 
-Key changes:
-1. Removed EXIT tile type from collision map at (row=2, col=6)
-2. isExit() function now always returns false (kept for compatibility)
-3. Exit logic in keyboard handler checks: newX >= SCENE_WIDTH_TILES && newY === START_Y && state.hasSeenSign
-4. Removed separate isExit() check in movement validation
-5. Only valid exit is: moving right off screen on path row (y===2) after seeing sign
+- /context reports system ~18.6k tokens
+- First SDK cache_read ~15.3k tokens
+- SYSTEM_GAP = ~3.3k tokens (system prompt tokens not in cache)
 
-Exit conditions:
-- SUCCESS: Player moves right past SCENE_WIDTH_TILES (7) on path row with hasSeenSign=true
-- DEATH: Any other attempt to move off-screen edge, or off-screen without hasSeenSign=true
+This means the formula `max(cache_read) + sum(input) + sum(output)` will undercount by ~17-19%.
 
-The player can walk all the way across the path (tiles 0-6) without exiting, must continue moving right past tile 6 to trigger the exit.
-**Files**: src/tui/screens/ForestIntro-termkit.ts
+The corrected formula requires calculating SYSTEM_GAP at startup:
+```
+SYSTEM_GAP = baseline_system_from_context - first_cache_read
+total = max(cache_read) + sum(input) + sum(output) + SYSTEM_GAP
+```
+
+Accuracy with correction:
+- Simple conversations: -0.3% error
+- Tool-heavy conversations: -2.3% error
+
+The slight undershoot with tools is due to pending tool results not yet cached.
+**Files**: src/router.ts, src/context-analyzer.ts
 ---
 
-### [22:42] [fix] Fixed dialogue box Y positioning in ForestIntro screen
-**Details**: The dialogue box was positioned at `sceneOffsetY + SCENE_HEIGHT_CHARS` which placed it completely below the scene (40 rows down). Fixed to position it to cover the bottom 3 tile rows of the scene by using `sceneOffsetY + (SCENE_HEIGHT_CHARS - 24)`. This places the dialogue 16 rows from the top of the scene (40 - 24 = 16), which covers the bottom 3 tiles (3 tiles × 8 rows/tile = 24 rows). Scene is 5 tiles tall at 40 character rows total.
-**Files**: src/tui/screens/ForestIntro-termkit.ts (lines 619-621)
+### [17:44] [architecture] Context calculation formula - FINAL WORKING VERSION
+**Details**: The definitive formula for calculating context window usage from SDK metrics:
+
+```
+total = system_gap + max(cache_read) + last(cache_create)
+```
+
+Where:
+- `system_gap = baseline_from_context - first_cache_read` (~3.2-3.6k typically)
+- `max(cache_read)` = highest cache_read_input_tokens across all messages (dedupe by message.id)
+- `last(cache_create)` = cache_creation_input_tokens from the LAST message only (NOT sum!)
+
+WHY last() instead of sum():
+- cache_create gets absorbed into the next message's cache_read
+- Summing would double-count as content moves through the cache
+- Only the last message's cache_create represents "pending" uncached content
+
+Tested across 8 scenarios (3-12 messages, with/without tools):
+- All results within 1.5% error
+- Most within 1% error
+- Average absolute error: ~0.64%
+
+To get baseline: Run `/context` command via SDK at session start and parse the total tokens.
+**Files**: src/router.ts, src/context-analyzer.ts, .claude/knowledge/architecture/context-calculation.md
 ---
 

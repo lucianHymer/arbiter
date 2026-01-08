@@ -10,24 +10,53 @@ Claude's Agent SDK returns usage data per message:
 
 But how do you calculate actual context window usage from these? The `/context` command shows accurate breakdowns, but it's not programmatically accessible. Everyone on the internet was guessing.
 
-## The Formula
+## The Formula (FINAL - January 2026)
 
 ```
-context = max(cache_read) + sum(input) + sum(output)
+total = baseline + (max(cache_read) - first(cache_read)) + last(cache_create)
 ```
 
-All values from `assistant.message.usage`, deduped by message UUID.
+Or more simply: **baseline + message_growth + pending_content**
 
-That's it. This matches `/context` output within 1-2%.
+All values from `assistant.message.usage`, deduped by `message.id` (NOT uuid!).
+
+### Components
+
+1. **baseline** = total tokens from `/context` at session start (~18-19k typically)
+
+2. **cache_read growth** = `max(cache_read) - first(cache_read)`
+   - How much the cache has grown since the first message
+   - Represents new message content that's been cached
+
+3. **last(cache_create)** = `cache_creation_input_tokens` from the LAST message ONLY
+   - **NOT sum()!** - cache_create gets absorbed into next message's cache_read
+   - Summing would double-count as content moves through cache
+   - Only the last message's cache_create is "pending" uncached content
+
+### Accuracy Results (8 test scenarios)
+
+| Messages | Tools | Calculated | Actual  | Error   |
+|----------|-------|------------|---------|---------|
+| 3        | No    | 18,941     | 19,000  | -0.31%  |
+| 3        | Yes   | 31,925     | 32,300  | -1.16%  |
+| 6        | No    | 19,280     | 19,000  | +1.47%  |
+| 6        | Yes   | 37,957     | 38,300  | -0.90%  |
+| 8        | Yes   | 45,969     | 46,300  | -0.71%  |
+| 10       | No    | 19,517     | 19,500  | +0.09%  |
+| 12       | No    | 19,367     | 19,400  | -0.17%  |
+| 12       | Yes   | 55,943     | 56,100  | -0.28%  |
+
+**Average absolute error: ~0.64%** - All tests within 1.5%!
 
 ## Why It Works
 
 ### cache_read_input_tokens
 - Represents cached content read for each API call
-- First message's cache_read ≈ **system overhead** (prompt + tools + memory)
+- First message's cache_read ≈ **system tools** (NOT full system prompt!)
 - Grows as conversation history gets cached
 - **NOT monotonically increasing** - can drop on session resume or cache expiry
 - Use **MAX** across all messages (high water mark)
+- **Does NOT include ~3k tokens of system prompt** - hence SYSTEM_GAP needed
 
 ### cache_creation_input_tokens (NOT used in formula)
 - Tokens being **added** to cache this turn
@@ -123,36 +152,120 @@ Example from real data:
 
 ## Implementation
 
+### Step 1: Get Baseline at Startup
+
+Run `/context` via SDK to get the baseline token count:
+
 ```typescript
-// State - track per API call, not per streaming chunk
-const seenMsgIds = new Set<string>();
-let maxCacheRead = 0;
-let sumInput = 0;
-let sumOutput = 0;
+import { query } from "@anthropic-ai/claude-agent-sdk";
 
-function updateContextFromAssistantMessage(msg: SDKAssistantMessage): number {
+/**
+ * Get baseline context by running /context command
+ * Returns the total tokens from a fresh session
+ */
+async function getBaseline(cwd: string): Promise<number> {
+  const q = query({
+    prompt: '/context',
+    options: { cwd, permissionMode: 'bypassPermissions' }
+  });
+
+  let baseline = 0;
+
+  for await (const msg of q) {
+    // /context output comes through as user message with <local-command-stdout>
+    if (msg.type === 'user') {
+      const content = (msg as any).message?.content;
+      if (typeof content === 'string') {
+        // Match: **Tokens:** 18.4k / 200.0k (9%)
+        const match = content.match(/\*\*Tokens:\*\*\s*([0-9.]+)k/i);
+        if (match) {
+          baseline = Math.round(parseFloat(match[1]) * 1000);
+        }
+      }
+    }
+  }
+
+  return baseline;  // ~18,000-19,000 typically
+}
+```
+
+### Step 2: Track Context During Session
+
+```typescript
+interface ContextTracker {
+  baseline: number;           // From /context at startup
+  seenMsgIds: Set<string>;    // Dedupe by message.id
+  firstCacheRead: number;     // First message's cache_read (to calc growth)
+  maxCacheRead: number;       // Highest cache_read seen
+  lastCacheCreate: number;    // Most recent cache_create (pending content)
+}
+
+function createContextTracker(baseline: number): ContextTracker {
+  return {
+    baseline,
+    seenMsgIds: new Set(),
+    firstCacheRead: 0,
+    maxCacheRead: 0,
+    lastCacheCreate: 0,
+  };
+}
+
+function updateContext(tracker: ContextTracker, msg: SDKAssistantMessage): void {
   const usage = (msg.message as any).usage;
-  if (!usage) return getCurrentContext();
+  if (!usage) return;
 
-  // Dedupe by message.id (API call ID), NOT uuid (streaming chunk ID)
+  // Dedupe by message.id (NOT uuid - that's per streaming chunk)
   const msgId = (msg.message as any).id;
-  if (seenMsgIds.has(msgId)) return getCurrentContext();
-  seenMsgIds.add(msgId);
+  if (tracker.seenMsgIds.has(msgId)) return;
+  tracker.seenMsgIds.add(msgId);
 
-  // Update totals
-  maxCacheRead = Math.max(maxCacheRead, usage.cache_read_input_tokens || 0);
-  sumInput += usage.input_tokens || 0;
-  sumOutput += usage.output_tokens || 0;
+  const cacheRead = usage.cache_read_input_tokens || 0;
+  const cacheCreate = usage.cache_creation_input_tokens || 0;
 
-  return getCurrentContext();
+  // Capture first cache_read as our reference point
+  if (tracker.firstCacheRead === 0) {
+    tracker.firstCacheRead = cacheRead;
+  }
+
+  // Update tracking
+  tracker.maxCacheRead = Math.max(tracker.maxCacheRead, cacheRead);
+  tracker.lastCacheCreate = cacheCreate;  // Always overwrite with latest
 }
 
-function getCurrentContext(): number {
-  return maxCacheRead + sumInput + sumOutput;
+function getContextTokens(tracker: ContextTracker): number {
+  // THE FORMULA: baseline + (cache_read growth) + (pending cache_create)
+  const cacheGrowth = tracker.maxCacheRead - tracker.firstCacheRead;
+  return tracker.baseline + cacheGrowth + tracker.lastCacheCreate;
 }
 
-function getContextPercent(): number {
-  return (getCurrentContext() / 200_000) * 100;
+function getContextPercent(tracker: ContextTracker): number {
+  return (getContextTokens(tracker) / 200_000) * 100;
+}
+```
+
+### Step 3: Put It Together
+
+```typescript
+async function startSession(cwd: string) {
+  // 1. Get baseline from /context
+  const baseline = await getBaseline(cwd);
+  console.log(`Baseline: ${baseline} tokens`);
+
+  // 2. Create tracker
+  const tracker = createContextTracker(baseline);
+
+  // 3. Start your actual session and track messages
+  const session = query({
+    prompt: 'Hello!',
+    options: { cwd, permissionMode: 'bypassPermissions' }
+  });
+
+  for await (const msg of session) {
+    if (msg.type === 'assistant') {
+      updateContext(tracker, msg);
+      console.log(`Context: ${getContextPercent(tracker).toFixed(1)}%`);
+    }
+  }
 }
 ```
 
@@ -170,12 +283,14 @@ The SDK usage data approach matches the token counting API without needing extra
 | What to track | How |
 |--------------|-----|
 | Dedupe key | `message.id` (NOT `uuid`) |
-| System overhead | First msg's cache_read, or fresh /context |
-| Cached content | max(cache_read) across all msgs |
-| New input | sum(input_tokens) |
-| Responses | sum(output_tokens) |
-| **Total context** | **max(cache_read) + sum(input) + sum(output)** |
+| Baseline | Run `/context` at startup, parse total tokens |
+| Message growth | `max(cache_read) - first(cache_read)` |
+| Pending content | `last(cache_create)` - LAST message only, NOT sum! |
+| **Total context** | **`baseline + (max - first cache_read) + last(cache_create)`** |
 
-**Critical:** Use `message.id` for deduplication! The SDK's `uuid` is per streaming chunk, but `message.id` is per API call. Using `uuid` will overcount by 2-3x.
+**Critical:**
+1. Use `message.id` for deduplication! The SDK's `uuid` is per streaming chunk, but `message.id` is per API call.
+2. Use `last(cache_create)` NOT `sum(cache_create)`! Cache_create gets absorbed into the next message's cache_read, so summing double-counts.
+3. Get baseline from `/context` at startup.
 
-This formula works for any Claude Agent SDK application. No more guessing.
+**Tested accuracy: ~0.64% average error across 8 test scenarios (3-12 messages, with/without tools).**
