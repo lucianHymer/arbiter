@@ -107,7 +107,8 @@ function createContextTracker(): ContextTracker {
 }
 
 function getContextTokens(tracker: ContextTracker): number {
-  return tracker.maxCacheRead + tracker.sumInput + tracker.sumOutput;
+  // Just max(cache_read) - experimentation shows this matches actual context usage
+  return tracker.maxCacheRead;
 }
 
 function getContextPercent(tracker: ContextTracker): number {
@@ -548,6 +549,8 @@ export class Router {
       abortController:
         this.orchestratorAbortController ?? new AbortController(),
       resume: this.state.currentOrchestrator.sessionId,
+      // Bypass permissions so tools work without prompts
+      permissionMode: 'bypassPermissions',
     };
 
     this.orchestratorQuery = query({
@@ -827,18 +830,21 @@ export class Router {
       details: {
         messageId: msgId,
         uniqueApiCalls: tracker.seenMsgIds.size,
-        // All four raw values
+        // All four raw values (still tracking everything)
         max_cache_read: tracker.maxCacheRead,
         sum_input: tracker.sumInput,
         sum_output: tracker.sumOutput,
         sum_cache_create: tracker.sumCacheCreate,
         // This message's values
         this_message: { cache_read: cacheRead, input, output, cache_create: cacheCreate },
-        // Computed formulas
+        // Primary formula: just max_cache_read
+        formula: 'max_cache_read',
         primary_tokens: primaryTokens,
         primary_percent: primaryPct,
-        audit_tokens: auditTokens,
-        audit_percent: auditPct,
+        // Alternate formula for comparison: sum(cache_create + input + output)
+        alt_formula: 'sum(cache_create + input + output)',
+        alt_tokens: auditTokens,
+        alt_percent: auditPct,
       },
     });
 

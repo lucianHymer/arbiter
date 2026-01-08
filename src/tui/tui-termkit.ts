@@ -376,6 +376,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw chat area - only redraws if messages or scroll changed
    */
   function drawChat(force: boolean = false) {
+    // Skip drawing if log viewer is open
+    if (inLogViewer) return;
+
     const scrollChanged = state.scrollOffset !== tracker.lastScrollOffset;
     const messagesChanged = state.messages.length !== tracker.lastMessageCount;
     const waitingChanged = state.waitingFor !== tracker.lastChatWaitingFor;
@@ -1000,6 +1003,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       // Tick hop animations and redraw if any are active
       const hasHops = tickHops();
+
+      // Animate bubbles when waiting (toggle every ~1 second based on animationFrame)
+      if (state.waitingFor !== 'none') {
+        // Show bubbles for frames 0-3, hide for frames 4-7 (toggles every 1 second)
+        state.sceneState.bubbleVisible = state.animationFrame < 4;
+      }
+
       if (hasHops || state.waitingFor !== 'none') {
         drawTiles();
         drawChat(); // Update chat working indicator
@@ -1071,7 +1081,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   // ============================================================================
 
   /**
-   * Start the summon sequence: walk to cauldron, show spellbook, then process demon queue.
+   * Start the summon sequence: walk to fire position, show spellbook, then process demon queue.
    * Called when mode changes to 'arbiter_to_orchestrator'.
    * Reuses animateArbiterWalk for the walking animation.
    */
@@ -1079,7 +1089,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (summonState !== 'idle') return; // Already summoning or dismissing
 
     summonState = 'walking';
-    animateArbiterWalk(2, () => {
+    animateArbiterWalk(3, () => {  // Pos 3 = by fire (row 3, col 4)
       // Walk complete - show spellbook after brief pause
       setTimeout(() => {
         state.sceneState.showSpellbook = true;
