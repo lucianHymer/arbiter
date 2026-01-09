@@ -483,10 +483,10 @@ export class Router {
       }
     }
 
-    // Notify TUI with updated values
+    // Notify TUI with updated values from state
     this.callbacks.onContextUpdate(
       this.state.arbiterContextPercent,
-      orchPercent
+      this.state.currentOrchestrator?.contextPercent ?? null
     );
   }
 
@@ -846,6 +846,12 @@ export class Router {
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
 
+    // Update context display to show orchestrator (initially at 0%)
+    this.callbacks.onContextUpdate(
+      this.state.arbiterContextPercent,
+      this.state.currentOrchestrator?.contextPercent ?? null
+    );
+
     // Start watchdog timer
     this.startWatchdog();
 
@@ -956,6 +962,12 @@ export class Router {
 
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
+
+    // Update context display to show orchestrator (initially at 0%)
+    this.callbacks.onContextUpdate(
+      this.state.arbiterContextPercent,
+      this.state.currentOrchestrator?.contextPercent ?? null
+    );
 
     // Start watchdog timer
     this.startWatchdog();
