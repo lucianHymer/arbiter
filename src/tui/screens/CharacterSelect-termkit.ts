@@ -181,7 +181,7 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
 
       // Title lines
       const title1 = 'Your journey to the Arbiter begins.';
-      const title2 = 'Choose wisely. The forest does not forgive those who stray.';
+      const title2 = 'Choose wisely. The forest does not forgive the undiscerning.';
 
       // Title 1 (yellow)
       term.moveTo(Math.max(1, Math.floor((width - title1.length) / 2)), startY);

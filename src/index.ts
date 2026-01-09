@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 // Main entry point for the Arbiter system
 // Ties together state, router, and TUI for the hierarchical AI orchestration system
 

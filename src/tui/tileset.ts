@@ -7,6 +7,7 @@
 
 import sharp from 'sharp';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 // ============================================================================
 // Constants
@@ -16,7 +17,11 @@ export const TILE_SIZE = 16;
 export const TILES_PER_ROW = 10;
 export const CHAR_HEIGHT = 8; // 16 pixels / 2 due to half-block rendering
 
-const TILESET_PATH = path.join(process.cwd(), 'assets/jerom_16x16.png');
+// Get package root directory (works when installed globally or locally)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PACKAGE_ROOT = path.resolve(__dirname, '..', '..'); // From dist/tui/ to package root
+const TILESET_PATH = path.join(PACKAGE_ROOT, 'assets/jerom_16x16.png');
 
 // ANSI escape sequences
 export const RESET = '\x1b[0m';
