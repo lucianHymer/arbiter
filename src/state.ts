@@ -31,6 +31,7 @@ export interface AppState {
   arbiterContextPercent: number;
   currentOrchestrator: OrchestratorState | null;
   conversationLog: Message[];
+  crashCount: number;
 }
 
 /**
@@ -43,6 +44,7 @@ export function createInitialState(): AppState {
     arbiterContextPercent: 0,
     currentOrchestrator: null,
     conversationLog: [],
+    crashCount: 0,
   };
 }
 

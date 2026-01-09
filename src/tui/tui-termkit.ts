@@ -90,6 +90,9 @@ interface TUIState {
 
   // Exit confirmation state
   pendingExit: boolean;
+
+  // Crash tracking
+  crashCount: number;
 }
 
 /**
@@ -276,6 +279,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     blinkCycle: 0,
     waitingFor: 'none',
     pendingExit: false,
+    crashCount: 0,
   };
 
   // Tracking for minimal redraws
@@ -570,6 +574,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (state.currentTool) {
       const toolInfo = `  ·  ${state.currentTool} (${state.toolCallCount})`;
       contextInfo += `\x1b[35m${toolInfo}\x1b[0m`;
+    }
+
+    // Crash indicator
+    if (state.crashCount > 0) {
+      contextInfo += `  ·  \x1b[31m⚠ ${state.crashCount} crash${state.crashCount > 1 ? 'es' : ''}\x1b[0m`;
     }
 
     term.moveTo(contextX, contextY);
@@ -1734,6 +1743,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawContext();
       },
 
+      onCrashCountUpdate: (count: number) => {
+        state.crashCount = count;
+        drawContext(true);  // Force redraw
+      },
+
       onDebugLog: (entry: DebugLogEntry) => {
         // Write to debug log file
         const timestamp = new Date().toISOString();
@@ -1881,6 +1895,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       console.log(`  Orchestrator: \x1b[36m${appState.currentOrchestrator.sessionId}\x1b[0m`);
     }
     console.log('');
+
+    // Show crash count if any
+    if (appState.crashCount > 0) {
+      console.log(`\n\x1b[33m⚠ Session had ${appState.crashCount} crash${appState.crashCount > 1 ? 'es' : ''} (recovered)\x1b[0m`);
+    }
 
     isRunning = false;
   }

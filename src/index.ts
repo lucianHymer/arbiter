@@ -5,6 +5,7 @@
 import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
 import { createTUI, TUI, showTitleScreen, showCharacterSelect, showForestIntro } from './tui/index.js';
+import { loadSession } from './session-persistence.js';
 
 /**
  * Session information for persistence on exit
@@ -65,6 +66,11 @@ async function main(): Promise<void> {
     // Output session info for resume capability
     if (state) {
       outputSessionInfo(state);
+
+      // Show crash count if any crashes occurred during runtime
+      if (state.crashCount > 0) {
+        process.stderr.write(`\nSession had ${state.crashCount} crash(es) during runtime\n`);
+      }
     }
 
     process.exit(exitCode);
@@ -77,22 +83,44 @@ async function main(): Promise<void> {
   });
 
   try {
-    // Show title screen first (any key continues)
-    await showTitleScreen();
+    // Parse CLI arguments
+    const args = process.argv.slice(2);
+    const shouldResume = args.includes('--resume');
 
-    // Show character selection screen
-    let selectResult = await showCharacterSelect();
-    let selectedCharacter = selectResult.character;
+    // Handle --resume flag
+    let savedSession = null;
+    if (shouldResume) {
+      savedSession = loadSession();
+      if (!savedSession) {
+        console.warn('No valid session to resume (file missing or stale >24h). Starting fresh...');
+      }
+    }
 
-    // Show animated forest intro with selected character (unless skipped)
-    // If player dies, go back to character select
-    if (!selectResult.skipIntro) {
-      let result = await showForestIntro(selectedCharacter);
-      while (result === 'death') {
-        selectResult = await showCharacterSelect();
-        selectedCharacter = selectResult.character;
-        if (selectResult.skipIntro) break;
-        result = await showForestIntro(selectedCharacter);
+    let selectedCharacter: number;
+
+    if (savedSession) {
+      // Resume mode: skip intros, use default character
+      selectedCharacter = 0;
+    } else {
+      // Normal mode: title screen, character select, forest intro
+
+      // Show title screen first (any key continues)
+      await showTitleScreen();
+
+      // Show character selection screen
+      let selectResult = await showCharacterSelect();
+      selectedCharacter = selectResult.character;
+
+      // Show animated forest intro with selected character (unless skipped)
+      // If player dies, go back to character select
+      if (!selectResult.skipIntro) {
+        let result = await showForestIntro(selectedCharacter);
+        while (result === 'death') {
+          selectResult = await showCharacterSelect();
+          selectedCharacter = selectResult.character;
+          if (selectResult.skipIntro) break;
+          result = await showForestIntro(selectedCharacter);
+        }
       }
     }
 
@@ -126,8 +154,12 @@ async function main(): Promise<void> {
     // Start TUI (takes over terminal)
     tui.start();
 
-    // Start router (initializes Arbiter session)
-    await router.start();
+    // Start router - either resume from saved session or start fresh
+    if (savedSession) {
+      await router.resumeFromSavedSession(savedSession);
+    } else {
+      await router.start();
+    }
 
     // Keep the process running
     // The TUI and router handle events asynchronously

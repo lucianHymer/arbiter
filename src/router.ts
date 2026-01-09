@@ -11,7 +11,17 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { z } from "zod";
+import { saveSession, PersistedSession } from './session-persistence.js';
 import { zodToJsonSchema } from "zod-to-json-schema";
+
+// Helper for async delays
+function sleep(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Retry constants for crash recovery
+const MAX_RETRIES = 3;
+const RETRY_DELAYS = [1000, 2000, 4000];  // 1s, 2s, 4s exponential backoff
 
 import type { AppState, OrchestratorState } from "./state.js";
 import {
@@ -99,6 +109,8 @@ export type RouterCallbacks = {
   onOrchestratorDisconnect?: () => void;
   /** Called for ALL events for debug logging (logbook) - includes filtered messages */
   onDebugLog?: (entry: DebugLogEntry) => void;
+  /** Called when crash count changes (for TUI status display) */
+  onCrashCountUpdate?: (count: number) => void;
 };
 
 // Maximum context window size (200K tokens)
@@ -158,7 +170,7 @@ interface OrchestratorSession {
   id: string;                           // Unique ID (e.g., "orch-1234567890")
   number: number;                       // Roman numeral suffix (I, II, III...)
   sessionId: string;                    // SDK session ID for resuming
-  query: AsyncGenerator<SDKMessage, void> | null;  // The active query generator
+  query: ReturnType<typeof query> | null;  // The active query generator
   abortController: AbortController;     // For killing the session
   contextTracker: ContextTracker;       // Context window tracking
   toolCallCount: number;                // Total tool calls made (was in Map, now here)
@@ -398,6 +410,9 @@ export class Router {
   // Baseline is fetched via /context with the same options as the agent
   private arbiterContextTracker: ContextTracker | null = null;
 
+  // Track crash recovery attempts for TUI display
+  private crashCount = 0;
+
   constructor(state: AppState, callbacks: RouterCallbacks) {
     this.state = state;
     this.callbacks = callbacks;
@@ -408,6 +423,22 @@ export class Router {
    */
   async start(): Promise<void> {
     await this.startArbiterSession();
+  }
+
+  /**
+   * Resume from a previously saved session
+   */
+  async resumeFromSavedSession(saved: PersistedSession): Promise<void> {
+    // Set arbiter session ID so startArbiterSession uses resume
+    this.state.arbiterSessionId = saved.arbiterSessionId;
+
+    // Start arbiter (it will use the session ID for resume)
+    await this.startArbiterSession();
+
+    // If there was an active orchestrator, resume it too
+    if (saved.orchestratorSessionId && saved.orchestratorNumber) {
+      await this.resumeOrchestratorSession(saved.orchestratorSessionId, saved.orchestratorNumber);
+    }
   }
 
   /**
@@ -780,6 +811,132 @@ export class Router {
   }
 
   /**
+   * Resume an existing Orchestrator session
+   * Similar to startOrchestratorSession but uses resume option and skips introduction
+   */
+  private async resumeOrchestratorSession(sessionId: string, number: number): Promise<void> {
+    // Clean up any existing orchestrator before resuming
+    this.cleanupOrchestrator();
+
+    // Notify that we're waiting for Orchestrator
+    this.callbacks.onWaitingStart?.('orchestrator');
+
+    // Restore orchestrator count
+    this.orchestratorCount = number;
+
+    // Generate unique ID for this orchestrator
+    const orchId = `orch-${Date.now()}`;
+
+    // Create abort controller for this session
+    const abortController = new AbortController();
+
+    // Create callbacks for hooks
+    const orchestratorCallbacks: OrchestratorCallbacks = {
+      onContextUpdate: (_sessionId: string, _percent: number) => {
+        // Context is now tracked from assistant messages via updateContextFromAssistant
+        // This callback exists for hook compatibility but is no longer the source of truth
+      },
+      onToolUse: (tool: string) => {
+        // Increment tool count on the session
+        if (this.currentOrchestratorSession) {
+          this.currentOrchestratorSession.toolCallCount++;
+          const newCount = this.currentOrchestratorSession.toolCallCount;
+
+          // Update state and notify callback
+          updateOrchestratorTool(this.state, tool, newCount);
+          this.callbacks.onToolUse(tool, newCount);
+
+          // Log tool use to debug (logbook) with orchestrator context
+          const conjuringLabel = `Conjuring ${toRoman(number)}`;
+          this.callbacks.onDebugLog?.({
+            type: 'tool',
+            speaker: conjuringLabel,
+            text: `[Tool] ${tool}`,
+            details: { tool, count: newCount },
+          });
+        }
+      },
+    };
+
+    // Create hooks for context management
+    const hooks = createOrchestratorHooks(
+      orchestratorCallbacks,
+      (_sessionId: string) =>
+        this.currentOrchestratorSession
+          ? getContextPercent(this.currentOrchestratorSession.contextTracker)
+          : 0
+    );
+
+    // Query options for resuming the Orchestrator session
+    const options: Options = {
+      systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+      hooks: hooks as Options["hooks"],
+      abortController: abortController,
+      permissionMode: 'bypassPermissions',
+      allowedTools: [
+        "Read",
+        "Write",
+        "Edit",
+        "Bash",
+        "Glob",
+        "Grep",
+        "Task",
+        "WebSearch",
+        "WebFetch",
+      ],
+      outputFormat: {
+        type: 'json_schema',
+        schema: orchestratorOutputJsonSchema,
+      },
+      // Resume the existing session
+      resume: sessionId,
+    };
+
+    // Get baseline context for Orchestrator with its specific options
+    const orchestratorBaseline = await getBaseline(options);
+
+    // Create the orchestrator query with a continuation prompt (not introduction)
+    const orchestratorQuery = query({
+      prompt: "[System: Session resumed. Continue where you left off.]",
+      options,
+    });
+
+    // Create the full OrchestratorSession object
+    // Note: sessionId is already known from the saved session
+    this.currentOrchestratorSession = {
+      id: orchId,
+      number,
+      sessionId: sessionId,  // Already known, don't set to empty string
+      query: orchestratorQuery,
+      abortController,
+      contextTracker: createContextTracker(orchestratorBaseline),
+      toolCallCount: 0,
+      queue: [],
+      lastActivityTime: Date.now(),
+    };
+
+    // Set up TUI-facing orchestrator state
+    setCurrentOrchestrator(this.state, {
+      id: orchId,
+      sessionId: sessionId,
+      number,
+    });
+
+    // Switch mode
+    setMode(this.state, "arbiter_to_orchestrator");
+    this.callbacks.onModeChange("arbiter_to_orchestrator");
+
+    // Notify about orchestrator spawn (for tile scene demon spawning)
+    this.callbacks.onOrchestratorSpawn?.(number);
+
+    // Start watchdog timer
+    this.startWatchdog();
+
+    // Process orchestrator messages
+    await this.processOrchestratorMessages(this.currentOrchestratorSession.query!);
+  }
+
+  /**
    * Send a message to the Arbiter
    */
   private async sendToArbiter(text: string): Promise<void> {
@@ -960,24 +1117,78 @@ export class Router {
   }
 
   /**
-   * Process messages from the Arbiter session
+   * Process messages from the Arbiter session with retry logic for crash recovery
    */
   private async processArbiterMessages(
-    generator: AsyncGenerator<SDKMessage, void>
+    generator: ReturnType<typeof query>
   ): Promise<void> {
     this.isProcessing = true;
+    let retries = 0;
+    let currentGenerator: ReturnType<typeof query> = generator;
 
     try {
-      try {
-        for await (const message of generator) {
-          await this.handleArbiterMessage(message);
+      while (true) {
+        try {
+          for await (const message of currentGenerator) {
+            // Reset retries on each successful message
+            retries = 0;
+            await this.handleArbiterMessage(message);
+          }
+          // Successfully finished processing
+          break;
+        } catch (error: any) {
+          if (error?.name === 'AbortError') {
+            // Silently ignore - this is expected during shutdown
+            return;
+          }
+
+          // Increment crash count and notify TUI
+          this.crashCount++;
+          this.callbacks.onCrashCountUpdate?.(this.crashCount);
+
+          // Log the error
+          this.callbacks.onDebugLog?.({
+            type: 'system',
+            text: `Arbiter crash #${this.crashCount}, retry ${retries + 1}/${MAX_RETRIES}`,
+            details: { error: error?.message || String(error) },
+          });
+
+          // Check if we've exceeded max retries
+          if (retries >= MAX_RETRIES) {
+            throw error;
+          }
+
+          // Wait before retrying with exponential backoff
+          await sleep(RETRY_DELAYS[retries]);
+          retries++;
+
+          // Create a new resume query
+          const options: Options = {
+            systemPrompt: ARBITER_SYSTEM_PROMPT,
+            abortController: this.arbiterAbortController ?? new AbortController(),
+            resume: this.state.arbiterSessionId ?? undefined,
+            mcpServers: this.arbiterMcpServer ? {
+              "arbiter-tools": this.arbiterMcpServer,
+            } : undefined,
+            permissionMode: 'bypassPermissions',
+            allowedTools: [
+              'mcp__arbiter-tools__spawn_orchestrator',
+              'mcp__arbiter-tools__disconnect_orchestrators',
+              'Read',
+              'Glob',
+              'Grep',
+              'WebSearch',
+              'WebFetch',
+              'Task',
+            ],
+          };
+
+          currentGenerator = query({
+            prompt: "[System: Session resumed after error. Continue where you left off.]",
+            options,
+          });
+          this.arbiterQuery = currentGenerator;
         }
-      } catch (error: any) {
-        if (error?.name === 'AbortError') {
-          // Silently ignore - this is expected during shutdown
-          return;
-        }
-        throw error;
       }
 
       // Stop waiting animation after Arbiter response is complete
@@ -1018,6 +1229,13 @@ export class Router {
         if ((message as SDKSystemMessage).subtype === "init") {
           // Capture session ID
           this.state.arbiterSessionId = message.session_id;
+
+          // Save session for crash recovery
+          saveSession(
+            message.session_id,
+            this.currentOrchestratorSession?.sessionId ?? null,
+            this.currentOrchestratorSession?.number ?? null
+          );
         }
         break;
 
@@ -1053,26 +1271,90 @@ export class Router {
   }
 
   /**
-   * Process messages from an Orchestrator session
+   * Process messages from an Orchestrator session with retry logic for crash recovery
    */
   private async processOrchestratorMessages(
-    generator: AsyncGenerator<SDKMessage, void>
+    generator: ReturnType<typeof query>
   ): Promise<void> {
-    try {
-      for await (const message of generator) {
-        await this.handleOrchestratorMessage(message);
-      }
+    let retries = 0;
+    let currentGenerator: ReturnType<typeof query> = generator;
 
-      // Stop waiting animation after Orchestrator response is complete
-      this.callbacks.onWaitingStop?.();
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        // Silently ignore - this is expected during shutdown
-        return;
+    while (true) {
+      try {
+        for await (const message of currentGenerator) {
+          // Reset retries on each successful message
+          retries = 0;
+          await this.handleOrchestratorMessage(message);
+        }
+        // Successfully finished processing
+        break;
+      } catch (error: any) {
+        if (error?.name === 'AbortError') {
+          // Silently ignore - this is expected during shutdown
+          return;
+        }
+
+        // Increment crash count and notify TUI
+        this.crashCount++;
+        this.callbacks.onCrashCountUpdate?.(this.crashCount);
+
+        // Log the error
+        this.callbacks.onDebugLog?.({
+          type: 'system',
+          text: `Orchestrator crash #${this.crashCount}, retry ${retries + 1}/${MAX_RETRIES}`,
+          details: { error: error?.message || String(error) },
+        });
+
+        // Check if we've exceeded max retries
+        if (retries >= MAX_RETRIES) {
+          // Orchestrator can't be resumed - cleanup and return (don't crash the whole app)
+          console.error("Orchestrator exceeded max retries, cleaning up:", error);
+          this.cleanupOrchestrator();
+          return;
+        }
+
+        // Make sure we still have an active session
+        if (!this.currentOrchestratorSession) {
+          return;
+        }
+
+        // Wait before retrying with exponential backoff
+        await sleep(RETRY_DELAYS[retries]);
+        retries++;
+
+        // Create a new resume query
+        const options: Options = {
+          systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+          abortController: this.currentOrchestratorSession.abortController,
+          resume: this.currentOrchestratorSession.sessionId,
+          permissionMode: 'bypassPermissions',
+          allowedTools: [
+            "Read",
+            "Write",
+            "Edit",
+            "Bash",
+            "Glob",
+            "Grep",
+            "Task",
+            "WebSearch",
+            "WebFetch",
+          ],
+          outputFormat: {
+            type: 'json_schema',
+            schema: orchestratorOutputJsonSchema,
+          },
+        };
+
+        currentGenerator = query({
+          prompt: "[System: Session resumed after error. Continue where you left off.]",
+          options,
+        });
+        this.currentOrchestratorSession.query = currentGenerator;
       }
-      console.error("Error processing Orchestrator messages:", error);
-      throw error;
     }
+
+    // Stop waiting animation after Orchestrator response is complete
+    this.callbacks.onWaitingStop?.();
   }
 
   /**
@@ -1100,6 +1382,13 @@ export class Router {
           if (this.state.currentOrchestrator) {
             this.state.currentOrchestrator.sessionId = message.session_id;
           }
+
+          // Save session for crash recovery
+          saveSession(
+            this.state.arbiterSessionId!,
+            message.session_id,
+            this.currentOrchestratorSession?.number ?? null
+          );
         }
         break;
 
