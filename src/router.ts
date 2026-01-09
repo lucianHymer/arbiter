@@ -10,6 +10,9 @@ import type {
   Options,
 } from "@anthropic-ai/claude-agent-sdk";
 
+import { z } from "zod";
+import { zodToJsonSchema } from "zod-to-json-schema";
+
 import type { AppState, OrchestratorState } from "./state.js";
 import {
   updateArbiterContext,
@@ -21,6 +24,24 @@ import {
   updateOrchestratorTool,
   toRoman,
 } from "./state.js";
+
+/**
+ * Schema for Orchestrator structured output
+ * Simple routing decision: does this message expect a response?
+ */
+const OrchestratorOutputSchema = z.object({
+  expects_response: z.boolean().describe(
+    "True if you need input from the Arbiter (questions, introductions, handoffs). False for status updates during heads-down work."
+  ),
+  message: z.string().describe("The message content"),
+});
+
+type OrchestratorOutput = z.infer<typeof OrchestratorOutputSchema>;
+
+// Convert to JSON Schema for SDK
+const orchestratorOutputJsonSchema = zodToJsonSchema(OrchestratorOutputSchema, {
+  $refStrategy: "none",
+});
 
 import {
   ARBITER_SYSTEM_PROMPT,
@@ -266,41 +287,11 @@ function truncate(str: string, maxLength: number): string {
 }
 
 /**
- * Check if a message contains the @ARBITER: trigger
- * Returns true if the message starts with @ARBITER: (case insensitive)
- */
-function hasArbiterTrigger(text: string): boolean {
-  return /^@ARBITER:/i.test(text.trim());
-}
-
-/**
- * Strip the @ARBITER: prefix from a message for display
- * Only strips from the beginning of the message
- */
-function stripTriggerTag(text: string): string {
-  return text.trim().replace(/^@ARBITER:\s*/i, '');
-}
-
-/**
- * Determine the trigger type from a message
- * Returns 'handoff' if message contains HANDOFF keyword after @ARBITER:
- * Returns 'input' otherwise
- */
-function getTriggerType(text: string): 'input' | 'handoff' {
-  const stripped = stripTriggerTag(text);
-  // Check if it's a handoff (contains HANDOFF keyword at start)
-  if (/^HANDOFF\b/i.test(stripped)) {
-    return 'handoff';
-  }
-  return 'input';
-}
-
-/**
  * Format queued messages and trigger message for the Arbiter
  * Uses «» delimiters with explicit labels
  *
- * @param queue - Array of queued messages (status updates)
- * @param triggerMessage - The message that triggered the flush (already stripped of @ARBITER:)
+ * @param queue - Array of queued messages (status updates from expects_response: false)
+ * @param triggerMessage - The message that triggered the flush (expects_response: true)
  * @param triggerType - 'input' for questions, 'handoff' for completion, 'human' for interjection
  * @param orchNumber - The orchestrator's number (for labeling)
  */
@@ -737,6 +728,11 @@ export class Router {
         "WebSearch",
         "WebFetch",
       ],
+      // Structured output for reliable routing decisions
+      outputFormat: {
+        type: 'json_schema',
+        schema: orchestratorOutputJsonSchema,
+      },
     };
 
     // Get baseline context for Orchestrator with its specific options
@@ -846,6 +842,11 @@ export class Router {
       resume: this.currentOrchestratorSession.sessionId,
       // Bypass permissions so tools work without prompts
       permissionMode: 'bypassPermissions',
+      // Structured output for reliable routing decisions
+      outputFormat: {
+        type: 'json_schema',
+        schema: orchestratorOutputJsonSchema,
+      },
     };
 
     const newQuery = query({
@@ -887,9 +888,11 @@ export class Router {
   }
 
   /**
-   * Handle Orchestrator output - queue by default, flush on @ARBITER: trigger
+   * Handle Orchestrator output - route based on expects_response field
+   * expects_response: true → forward to Arbiter (questions, introductions, handoffs)
+   * expects_response: false → queue for later (status updates during work)
    */
-  private async handleOrchestratorOutput(text: string): Promise<void> {
+  private async handleOrchestratorOutput(output: OrchestratorOutput): Promise<void> {
     if (!this.currentOrchestratorSession) {
       console.error("No active orchestrator for output");
       return;
@@ -899,37 +902,34 @@ export class Router {
     const orchNumber = session.number;
     const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
     const conjuringLabel = `Conjuring ${toRoman(orchNumber)}`;
+    const { expects_response, message } = output;
 
-    // Check for @ARBITER: trigger
-    const hasTrigger = hasArbiterTrigger(text);
-
-    // Strip trigger for display (user sees clean message)
-    const displayText = hasTrigger ? stripTriggerTag(text) : text;
-
-    // Log the message (use display text for cleaner logs)
-    addMessage(this.state, orchLabel, displayText);
+    // Log the message
+    addMessage(this.state, orchLabel, message);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
       type: 'message',
       speaker: conjuringLabel,
-      text: displayText,
+      text: message,
+      details: { expects_response },
     });
 
     // Notify callback for TUI display
-    this.callbacks.onOrchestratorMessage(orchNumber, displayText);
+    this.callbacks.onOrchestratorMessage(orchNumber, message);
 
     // Update activity timestamp for watchdog
     session.lastActivityTime = Date.now();
 
-    if (hasTrigger) {
-      // Determine trigger type (input vs handoff)
-      const triggerType = getTriggerType(text);
+    if (expects_response) {
+      // Forward to Arbiter - determine if this looks like a handoff
+      const isHandoff = /^HANDOFF\b/i.test(message.trim());
+      const triggerType = isHandoff ? 'handoff' : 'input';
 
-      // Format the queue + trigger message for Arbiter
+      // Format the queue + message for Arbiter
       const formattedMessage = formatQueueForArbiter(
         session.queue,
-        displayText,  // Already stripped of @ARBITER:
+        message,
         triggerType,
         orchNumber
       );
@@ -937,8 +937,8 @@ export class Router {
       // Log the flush for debugging
       this.callbacks.onDebugLog?.({
         type: 'system',
-        text: `Flushing ${session.queue.length} queued messages + ${triggerType} to Arbiter`,
-        details: { queueLength: session.queue.length, triggerType },
+        text: `Forwarding to Arbiter (${triggerType}) with ${session.queue.length} queued messages`,
+        details: { queueLength: session.queue.length, triggerType, expects_response },
       });
 
       // Clear the queue
@@ -947,13 +947,14 @@ export class Router {
       // Send formatted message to Arbiter
       await this.sendToArbiter(formattedMessage);
     } else {
-      // Queue the message (raw text, not stripped - we want full context)
-      session.queue.push(text);
+      // Queue the message for later
+      session.queue.push(message);
 
       // Log the queue action for debugging
       this.callbacks.onDebugLog?.({
         type: 'system',
         text: `Queued message (${session.queue.length} total)`,
+        details: { expects_response },
       });
     }
   }
@@ -1103,10 +1104,8 @@ export class Router {
         break;
 
       case "assistant":
-        // Extract text content from the assistant message
-        const assistantMessage = message as SDKAssistantMessage;
-
         // Track context from assistant messages (correct source)
+        const assistantMessage = message as SDKAssistantMessage;
         if (this.currentOrchestratorSession) {
           this.updateContextFromAssistant(
             assistantMessage,
@@ -1114,18 +1113,30 @@ export class Router {
             'orchestrator'
           );
         }
-
-        const textContent = this.extractTextFromAssistantMessage(
-          assistantMessage
-        );
-        if (textContent) {
-          await this.handleOrchestratorOutput(textContent);
-        }
+        // Note: We don't extract text from assistant messages anymore
+        // The authoritative output comes from structured_output in result messages
         break;
 
       case "result":
-        // Result messages are logged for debugging but NOT used for context tracking
-        // Context is tracked from assistant messages (see updateContextFromAssistant)
+        // Handle structured output from successful result messages
+        const resultMessage = message as SDKResultMessage;
+        if (resultMessage.subtype === 'success') {
+          const structuredOutput = (resultMessage as any).structured_output;
+          if (structuredOutput) {
+            // Parse and validate the structured output
+            const parsed = OrchestratorOutputSchema.safeParse(structuredOutput);
+            if (parsed.success) {
+              await this.handleOrchestratorOutput(parsed.data);
+            } else {
+              // Log parsing error but don't crash
+              this.callbacks.onDebugLog?.({
+                type: 'system',
+                text: `Failed to parse orchestrator output: ${parsed.error.message}`,
+                details: { structuredOutput, error: parsed.error },
+              });
+            }
+          }
+        }
         break;
     }
   }
