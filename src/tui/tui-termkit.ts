@@ -80,6 +80,7 @@ interface TUIState {
   orchestratorContextPercent: number | null;
   currentTool: string | null;
   toolCallCount: number;
+  lastToolTime: number;  // timestamp when tool was last set
 
   // Animation state
   animationFrame: number;
@@ -223,6 +224,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     orchestratorContextPercent: null,
     currentTool: null,
     toolCallCount: 0,
+    lastToolTime: 0,
     animationFrame: 0,
     blinkCycle: 0,
     waitingFor: 'none',
@@ -437,6 +439,17 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         // Keep the space but don't show text (smooth blinking)
         renderedLines.push({ text: '', color: COLORS.reset });
       }
+    }
+
+    // Transient tool indicator with pulse animation
+    if (state.currentTool && Date.now() - state.lastToolTime < 5000) {
+      if (renderedLines.length > 0) {
+        renderedLines.push({ text: '', color: COLORS.reset });
+      }
+      // Pulse effect: alternate visibility based on animation frame
+      const pulse = state.animationFrame < 4 ? '⸬' : ' ';
+      const toolText = `${pulse} ${state.currentTool} ${pulse}`;
+      renderedLines.push({ text: toolText, color: `\x1b[2m\x1b[35m` }); // dim + magenta
     }
 
     // Draw visible lines
@@ -1001,6 +1014,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.blinkCycle = (state.blinkCycle + 1) % 8;
       }
 
+      // Auto-clear expired tool indicator
+      if (state.currentTool && Date.now() - state.lastToolTime > 5000) {
+        state.currentTool = null;
+        state.toolCallCount = 0;
+      }
+
       // Tick hop animations and redraw if any are active
       const hasHops = tickHops();
 
@@ -1249,7 +1268,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       onToolUse: (tool: string, count: number) => {
         state.currentTool = tool;
         state.toolCallCount = count;
+        state.lastToolTime = Date.now();
         drawStatus();
+        drawChat();  // Also redraw chat for tool indicator
       },
 
       onModeChange: (mode: AppState['mode']) => {

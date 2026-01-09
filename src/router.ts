@@ -130,6 +130,22 @@ function getContextPercent(tracker: ContextTracker): number {
 }
 
 /**
+ * Orchestrator session state - bundles all orchestrator-related data
+ * This replaces the scattered properties that were previously on Router
+ */
+interface OrchestratorSession {
+  id: string;                           // Unique ID (e.g., "orch-1234567890")
+  number: number;                       // Roman numeral suffix (I, II, III...)
+  sessionId: string;                    // SDK session ID for resuming
+  query: AsyncGenerator<SDKMessage, void> | null;  // The active query generator
+  abortController: AbortController;     // For killing the session
+  contextTracker: ContextTracker;       // Context window tracking
+  toolCallCount: number;                // Total tool calls made (was in Map, now here)
+  queue: string[];                      // Queued messages awaiting flush to Arbiter
+  lastActivityTime: number;             // For watchdog timeout detection
+}
+
+/**
  * Get baseline context by running /context with the same options as the agent.
  * This ensures the baseline reflects the agent's specific tools, system prompt, etc.
  */
@@ -250,6 +266,108 @@ function truncate(str: string, maxLength: number): string {
 }
 
 /**
+ * Check if a message contains the @ARBITER: trigger
+ * Returns true if the message starts with @ARBITER: (case insensitive)
+ */
+function hasArbiterTrigger(text: string): boolean {
+  return /^@ARBITER:/i.test(text.trim());
+}
+
+/**
+ * Strip the @ARBITER: prefix from a message for display
+ * Only strips from the beginning of the message
+ */
+function stripTriggerTag(text: string): string {
+  return text.trim().replace(/^@ARBITER:\s*/i, '');
+}
+
+/**
+ * Determine the trigger type from a message
+ * Returns 'handoff' if message contains HANDOFF keyword after @ARBITER:
+ * Returns 'input' otherwise
+ */
+function getTriggerType(text: string): 'input' | 'handoff' {
+  const stripped = stripTriggerTag(text);
+  // Check if it's a handoff (contains HANDOFF keyword at start)
+  if (/^HANDOFF\b/i.test(stripped)) {
+    return 'handoff';
+  }
+  return 'input';
+}
+
+/**
+ * Format queued messages and trigger message for the Arbiter
+ * Uses «» delimiters with explicit labels
+ *
+ * @param queue - Array of queued messages (status updates)
+ * @param triggerMessage - The message that triggered the flush (already stripped of @ARBITER:)
+ * @param triggerType - 'input' for questions, 'handoff' for completion, 'human' for interjection
+ * @param orchNumber - The orchestrator's number (for labeling)
+ */
+function formatQueueForArbiter(
+  queue: string[],
+  triggerMessage: string,
+  triggerType: 'input' | 'handoff' | 'human',
+  orchNumber: number
+): string {
+  const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
+  const parts: string[] = [];
+
+  // Add work log section if there are queued messages
+  if (queue.length > 0) {
+    parts.push(`«${orchLabel} - Work Log (no response needed)»`);
+    for (const msg of queue) {
+      parts.push(`• ${msg}`);
+    }
+    parts.push(''); // Empty line separator
+  }
+
+  // Add the trigger section based on type
+  switch (triggerType) {
+    case 'input':
+      parts.push(`«${orchLabel} - Awaiting Input»`);
+      break;
+    case 'handoff':
+      parts.push(`«${orchLabel} - Handoff»`);
+      break;
+    case 'human':
+      parts.push(`«Human Interjection»`);
+      break;
+  }
+  parts.push(triggerMessage);
+
+  return parts.join('\n');
+}
+
+/**
+ * Format a timeout message for the Arbiter
+ */
+function formatTimeoutForArbiter(
+  queue: string[],
+  orchNumber: number,
+  idleMinutes: number
+): string {
+  const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
+  const parts: string[] = [];
+
+  // Add work log if there are queued messages
+  if (queue.length > 0) {
+    parts.push(`«${orchLabel} - Work Log (no response needed)»`);
+    for (const msg of queue) {
+      parts.push(`• ${msg}`);
+    }
+    parts.push('');
+  }
+
+  // Add timeout notice
+  parts.push(`«${orchLabel} - TIMEOUT»`);
+  parts.push(`No activity for ${idleMinutes} minutes. Session terminated.`);
+  parts.push(`The Orchestrator may have encountered an error or become stuck.`);
+
+  return parts.join('\n');
+}
+
+/**
  * Router class - Core component managing sessions and routing messages
  *
  * The router manages the Arbiter and Orchestrator sessions, routing messages
@@ -262,13 +380,12 @@ export class Router {
 
   // Session state
   private arbiterQuery: ReturnType<typeof query> | null = null;
-  private orchestratorQuery: ReturnType<typeof query> | null = null;
+
+  // Orchestrator session - bundles all orchestrator-related state
+  private currentOrchestratorSession: OrchestratorSession | null = null;
 
   // Track orchestrator count for numbering (I, II, III...)
   private orchestratorCount = 0;
-
-  // Track tool call counts per orchestrator
-  private toolCallCounts: Map<string, number> = new Map();
 
   // Pending orchestrator spawn flag
   private pendingOrchestratorSpawn: boolean = false;
@@ -279,15 +396,16 @@ export class Router {
 
   // Abort controllers for graceful shutdown
   private arbiterAbortController: AbortController | null = null;
-  private orchestratorAbortController: AbortController | null = null;
+
+  // Watchdog timer for orchestrator inactivity detection
+  private watchdogInterval: NodeJS.Timeout | null = null;
 
   // Store MCP server for Arbiter session resumption
   private arbiterMcpServer: any = null;
 
-  // Context tracking - separate tracker per session
+  // Context tracking for Arbiter session
   // Baseline is fetched via /context with the same options as the agent
   private arbiterContextTracker: ContextTracker | null = null;
-  private orchestratorContextTracker: ContextTracker | null = null;
 
   constructor(state: AppState, callbacks: RouterCallbacks) {
     this.state = state;
@@ -305,18 +423,38 @@ export class Router {
    * Send a human message to the system
    * Routes based on current mode:
    * - human_to_arbiter: Send directly to Arbiter
-   * - arbiter_to_orchestrator: Inject to Arbiter tagged as "Human:"
+   * - arbiter_to_orchestrator: Flush queue with human interjection framing
    */
   async sendHumanMessage(text: string): Promise<void> {
     // Log the human message and notify TUI immediately
     addMessage(this.state, "human", text);
     this.callbacks.onHumanMessage(text);
 
-    if (this.state.mode === "human_to_arbiter") {
-      // Send directly to Arbiter
-      await this.sendToArbiter(text);
+    if (this.state.mode === "arbiter_to_orchestrator" && this.currentOrchestratorSession) {
+      const session = this.currentOrchestratorSession;
+
+      // Human interjection during orchestrator work - flush queue with context
+      const formattedMessage = formatQueueForArbiter(
+        session.queue,
+        text,
+        'human',
+        session.number
+      );
+
+      // Log the flush for debugging
+      this.callbacks.onDebugLog?.({
+        type: 'system',
+        text: `Human interjection - flushing ${session.queue.length} queued messages`,
+        details: { queueLength: session.queue.length },
+      });
+
+      // Clear the queue
+      session.queue = [];
+
+      // Send formatted message to Arbiter
+      await this.sendToArbiter(formattedMessage);
     } else {
-      // Inject to Arbiter
+      // Direct to Arbiter (no orchestrator active or in human_to_arbiter mode)
       await this.sendToArbiter(text);
     }
   }
@@ -325,19 +463,126 @@ export class Router {
    * Clean shutdown of all sessions
    */
   async stop(): Promise<void> {
+    // Stop watchdog timer
+    this.stopWatchdog();
+
     // Abort any running queries
     if (this.arbiterAbortController) {
       this.arbiterAbortController.abort();
       this.arbiterAbortController = null;
     }
 
-    if (this.orchestratorAbortController) {
-      this.orchestratorAbortController.abort();
-      this.orchestratorAbortController = null;
-    }
+    // Clean up orchestrator using the unified method
+    this.cleanupOrchestrator();
 
     this.arbiterQuery = null;
-    this.orchestratorQuery = null;
+  }
+
+  /**
+   * Clean up the current orchestrator session
+   * Called when: spawning new orchestrator, disconnect, timeout, shutdown
+   */
+  private cleanupOrchestrator(): void {
+    // Stop watchdog timer
+    this.stopWatchdog();
+
+    if (!this.currentOrchestratorSession) return;
+
+    const session = this.currentOrchestratorSession;
+    const orchLabel = `Orchestrator ${toRoman(session.number)}`;
+
+    // 1. Log any orphaned queue messages (for debugging)
+    if (session.queue.length > 0) {
+      this.callbacks.onDebugLog?.({
+        type: 'system',
+        text: `${orchLabel} released with ${session.queue.length} undelivered messages`,
+        details: { queuedMessages: session.queue },
+      });
+    }
+
+    // 2. Abort the SDK session
+    session.abortController.abort();
+
+    // 3. Clear the working indicator (will be added later, safe to call now)
+    // this.callbacks.onWorkingIndicator?.('orchestrator', null);
+
+    // 4. Null out the session
+    this.currentOrchestratorSession = null;
+
+    // 5. Update shared state for TUI
+    clearCurrentOrchestrator(this.state);
+
+    // 6. Reset mode
+    setMode(this.state, "human_to_arbiter");
+    this.callbacks.onModeChange("human_to_arbiter");
+
+    // 7. Update context display (no orchestrator)
+    this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
+
+    // 8. Notify TUI about orchestrator disconnect (for tile scene)
+    this.callbacks.onOrchestratorDisconnect?.();
+  }
+
+  /**
+   * Start the watchdog timer for orchestrator inactivity detection
+   */
+  private startWatchdog(): void {
+    // Clear any existing watchdog
+    this.stopWatchdog();
+
+    // Check every 30 seconds
+    this.watchdogInterval = setInterval(() => {
+      if (!this.currentOrchestratorSession) return;
+
+      const idleMs = Date.now() - this.currentOrchestratorSession.lastActivityTime;
+      const idleMinutes = Math.floor(idleMs / 60000);
+
+      // 10 minute timeout
+      if (idleMinutes >= 10) {
+        this.handleOrchestratorTimeout(idleMinutes);
+      }
+    }, 30000);
+  }
+
+  /**
+   * Stop the watchdog timer
+   */
+  private stopWatchdog(): void {
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = null;
+    }
+  }
+
+  /**
+   * Handle orchestrator timeout - notify Arbiter and cleanup
+   */
+  private async handleOrchestratorTimeout(idleMinutes: number): Promise<void> {
+    if (!this.currentOrchestratorSession) return;
+
+    const session = this.currentOrchestratorSession;
+
+    // Log the timeout
+    this.callbacks.onDebugLog?.({
+      type: 'system',
+      text: `Orchestrator ${toRoman(session.number)} timed out after ${idleMinutes} minutes of inactivity`,
+    });
+
+    // Format timeout message for Arbiter
+    const timeoutMessage = formatTimeoutForArbiter(
+      session.queue,
+      session.number,
+      idleMinutes
+    );
+
+    // Cleanup the orchestrator (this also clears the queue)
+    this.cleanupOrchestrator();
+
+    // Stop the watchdog
+    this.stopWatchdog();
+
+    // Notify Arbiter about the timeout
+    await this.sendToArbiter(timeoutMessage);
   }
 
   // ============================================
@@ -362,24 +607,7 @@ export class Router {
         this.pendingOrchestratorNumber = orchestratorNumber;
       },
       onDisconnectOrchestrators: () => {
-        // Clean up current orchestrator
-        if (this.orchestratorAbortController) {
-          this.orchestratorAbortController.abort();
-          this.orchestratorAbortController = null;
-        }
-        this.orchestratorQuery = null;
-        this.orchestratorContextTracker = null;  // Clear context tracker
-        clearCurrentOrchestrator(this.state);
-
-        // Switch mode
-        setMode(this.state, "human_to_arbiter");
-        this.callbacks.onModeChange("human_to_arbiter");
-
-        // Update context display (no orchestrator)
-        this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
-
-        // Notify about orchestrator disconnect (for tile scene demon removal)
-        this.callbacks.onOrchestratorDisconnect?.();
+        this.cleanupOrchestrator();
       },
     };
 
@@ -437,17 +665,20 @@ export class Router {
    * Creates and starts an Orchestrator session
    */
   private async startOrchestratorSession(number: number): Promise<void> {
+    // Clean up any existing orchestrator before spawning new one (hard abort)
+    this.cleanupOrchestrator();
+
     // Notify that we're waiting for Orchestrator
     this.callbacks.onWaitingStart?.('orchestrator');
 
     // Increment orchestrator count
     this.orchestratorCount = number;
 
-    // Create abort controller for this session
-    this.orchestratorAbortController = new AbortController();
-
     // Generate unique ID for this orchestrator
     const orchId = `orch-${Date.now()}`;
+
+    // Create abort controller for this session
+    const abortController = new AbortController();
 
     // Create callbacks for hooks
     const orchestratorCallbacks: OrchestratorCallbacks = {
@@ -456,23 +687,24 @@ export class Router {
         // This callback exists for hook compatibility but is no longer the source of truth
       },
       onToolUse: (tool: string) => {
-        // Increment tool count
-        const currentCount = this.toolCallCounts.get(orchId) || 0;
-        const newCount = currentCount + 1;
-        this.toolCallCounts.set(orchId, newCount);
+        // Increment tool count on the session
+        if (this.currentOrchestratorSession) {
+          this.currentOrchestratorSession.toolCallCount++;
+          const newCount = this.currentOrchestratorSession.toolCallCount;
 
-        // Update state and notify callback
-        updateOrchestratorTool(this.state, tool, newCount);
-        this.callbacks.onToolUse(tool, newCount);
+          // Update state and notify callback
+          updateOrchestratorTool(this.state, tool, newCount);
+          this.callbacks.onToolUse(tool, newCount);
 
-        // Log tool use to debug (logbook) with orchestrator context
-        const conjuringLabel = `Conjuring ${toRoman(number)}`;
-        this.callbacks.onDebugLog?.({
-          type: 'tool',
-          speaker: conjuringLabel,
-          text: `[Tool] ${tool}`,
-          details: { tool, count: newCount },
-        });
+          // Log tool use to debug (logbook) with orchestrator context
+          const conjuringLabel = `Conjuring ${toRoman(number)}`;
+          this.callbacks.onDebugLog?.({
+            type: 'tool',
+            speaker: conjuringLabel,
+            text: `[Tool] ${tool}`,
+            details: { tool, count: newCount },
+          });
+        }
       },
     };
 
@@ -481,8 +713,8 @@ export class Router {
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
       (_sessionId: string) =>
-        this.orchestratorContextTracker
-          ? getContextPercent(this.orchestratorContextTracker)
+        this.currentOrchestratorSession
+          ? getContextPercent(this.currentOrchestratorSession.contextTracker)
           : 0
     );
 
@@ -490,7 +722,7 @@ export class Router {
     const options: Options = {
       systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
       hooks: hooks as Options["hooks"],
-      abortController: this.orchestratorAbortController,
+      abortController: abortController,
       // Bypass permissions so tools work without prompts
       permissionMode: 'bypassPermissions',
       // Orchestrators use all standard tools plus Task for subagents
@@ -509,15 +741,27 @@ export class Router {
 
     // Get baseline context for Orchestrator with its specific options
     const orchestratorBaseline = await getBaseline(options);
-    this.orchestratorContextTracker = createContextTracker(orchestratorBaseline);
 
-    // Create the orchestrator session - orchestrator introduces themselves
-    this.orchestratorQuery = query({
+    // Create the orchestrator query
+    const orchestratorQuery = query({
       prompt: "Introduce yourself and await instructions from the Arbiter.",
       options,
     });
 
-    // Set up orchestrator state before processing
+    // Create the full OrchestratorSession object
+    this.currentOrchestratorSession = {
+      id: orchId,
+      number,
+      sessionId: "", // Will be set when we get the init message
+      query: orchestratorQuery,
+      abortController,
+      contextTracker: createContextTracker(orchestratorBaseline),
+      toolCallCount: 0,
+      queue: [],
+      lastActivityTime: Date.now(),
+    };
+
+    // Set up TUI-facing orchestrator state before processing
     // We'll update the session ID when we get the init message
     setCurrentOrchestrator(this.state, {
       id: orchId,
@@ -532,8 +776,11 @@ export class Router {
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
 
+    // Start watchdog timer
+    this.startWatchdog();
+
     // Process orchestrator messages
-    await this.processOrchestratorMessages(this.orchestratorQuery);
+    await this.processOrchestratorMessages(this.currentOrchestratorSession.query!);
   }
 
   /**
@@ -584,8 +831,8 @@ export class Router {
    * Send a message to the current Orchestrator
    */
   private async sendToOrchestrator(text: string): Promise<void> {
-    if (!this.state.currentOrchestrator) {
-      console.error("No active orchestrator");
+    if (!this.currentOrchestratorSession) {
+      console.error("No active orchestrator session");
       return;
     }
 
@@ -595,19 +842,21 @@ export class Router {
     // Create a new query to continue the conversation
     const options: Options = {
       systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-      abortController:
-        this.orchestratorAbortController ?? new AbortController(),
-      resume: this.state.currentOrchestrator.sessionId,
+      abortController: this.currentOrchestratorSession.abortController,
+      resume: this.currentOrchestratorSession.sessionId,
       // Bypass permissions so tools work without prompts
       permissionMode: 'bypassPermissions',
     };
 
-    this.orchestratorQuery = query({
+    const newQuery = query({
       prompt: text,
       options,
     });
 
-    await this.processOrchestratorMessages(this.orchestratorQuery);
+    // Update the session's query
+    this.currentOrchestratorSession.query = newQuery;
+
+    await this.processOrchestratorMessages(newQuery);
   }
 
   /**
@@ -638,33 +887,75 @@ export class Router {
   }
 
   /**
-   * Handle Orchestrator output - routes to Arbiter with tag
+   * Handle Orchestrator output - queue by default, flush on @ARBITER: trigger
    */
   private async handleOrchestratorOutput(text: string): Promise<void> {
-    if (!this.state.currentOrchestrator) {
+    if (!this.currentOrchestratorSession) {
       console.error("No active orchestrator for output");
       return;
     }
 
-    const orchNumber = this.state.currentOrchestrator.number;
+    const session = this.currentOrchestratorSession;
+    const orchNumber = session.number;
     const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
     const conjuringLabel = `Conjuring ${toRoman(orchNumber)}`;
 
-    // Log the message
-    addMessage(this.state, orchLabel, text);
+    // Check for @ARBITER: trigger
+    const hasTrigger = hasArbiterTrigger(text);
+
+    // Strip trigger for display (user sees clean message)
+    const displayText = hasTrigger ? stripTriggerTag(text) : text;
+
+    // Log the message (use display text for cleaner logs)
+    addMessage(this.state, orchLabel, displayText);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
       type: 'message',
       speaker: conjuringLabel,
-      text,
+      text: displayText,
     });
 
-    // Notify callback
-    this.callbacks.onOrchestratorMessage(orchNumber, text);
+    // Notify callback for TUI display
+    this.callbacks.onOrchestratorMessage(orchNumber, displayText);
 
-    // Route to Arbiter
-    await this.sendToArbiter(text);
+    // Update activity timestamp for watchdog
+    session.lastActivityTime = Date.now();
+
+    if (hasTrigger) {
+      // Determine trigger type (input vs handoff)
+      const triggerType = getTriggerType(text);
+
+      // Format the queue + trigger message for Arbiter
+      const formattedMessage = formatQueueForArbiter(
+        session.queue,
+        displayText,  // Already stripped of @ARBITER:
+        triggerType,
+        orchNumber
+      );
+
+      // Log the flush for debugging
+      this.callbacks.onDebugLog?.({
+        type: 'system',
+        text: `Flushing ${session.queue.length} queued messages + ${triggerType} to Arbiter`,
+        details: { queueLength: session.queue.length, triggerType },
+      });
+
+      // Clear the queue
+      session.queue = [];
+
+      // Send formatted message to Arbiter
+      await this.sendToArbiter(formattedMessage);
+    } else {
+      // Queue the message (raw text, not stripped - we want full context)
+      session.queue.push(text);
+
+      // Log the queue action for debugging
+      this.callbacks.onDebugLog?.({
+        type: 'system',
+        text: `Queued message (${session.queue.length} total)`,
+      });
+    }
   }
 
   /**
@@ -788,7 +1079,7 @@ export class Router {
    */
   private async handleOrchestratorMessage(message: SDKMessage): Promise<void> {
     // Log ALL raw SDK messages for debug
-    const orchSessionId = this.state.currentOrchestrator?.sessionId;
+    const orchSessionId = this.currentOrchestratorSession?.sessionId;
     this.callbacks.onDebugLog?.({
       type: 'sdk',
       agent: 'orchestrator',
@@ -801,7 +1092,10 @@ export class Router {
     switch (message.type) {
       case "system":
         if ((message as SDKSystemMessage).subtype === "init") {
-          // Update orchestrator session ID
+          // Update orchestrator session ID on both the session and TUI state
+          if (this.currentOrchestratorSession) {
+            this.currentOrchestratorSession.sessionId = message.session_id;
+          }
           if (this.state.currentOrchestrator) {
             this.state.currentOrchestrator.sessionId = message.session_id;
           }
@@ -813,10 +1107,10 @@ export class Router {
         const assistantMessage = message as SDKAssistantMessage;
 
         // Track context from assistant messages (correct source)
-        if (this.orchestratorContextTracker) {
+        if (this.currentOrchestratorSession) {
           this.updateContextFromAssistant(
             assistantMessage,
-            this.orchestratorContextTracker,
+            this.currentOrchestratorSession.contextTracker,
             'orchestrator'
           );
         }
@@ -912,8 +1206,8 @@ export class Router {
     // Update state and notify callback
     if (agent === 'arbiter') {
       updateArbiterContext(this.state, pct);
-      const orchPct = this.state.currentOrchestrator
-        ? getContextPercent(this.orchestratorContextTracker!)
+      const orchPct = this.currentOrchestratorSession
+        ? getContextPercent(this.currentOrchestratorSession.contextTracker)
         : null;
       this.callbacks.onContextUpdate(pct, orchPct);
     } else {

@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "test:headless": "tsx src/test-headless.ts",
+    "test:queue": "npx tsx src/test-queue-logic.ts",
     "analyze:context": "tsx src/context-analyzer.ts"
   },
   "dependencies": {

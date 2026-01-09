@@ -60,7 +60,7 @@ Once aligned with the Arbiter, you go heads-down and WORK. Minimal conversation 
 - Spawn subagents, execute tasks, verify results
 - Do NOT send status updates or progress reports to the Arbiter
 - Do NOT chatter with the Arbiter—every message back uses context
-- Only reach out to the Arbiter if something is genuinely blocking or you need critical input
+- Only use @ARBITER: if something is genuinely blocking or you need critical input
 - Work silently and productively until the work is done or context is filling
 
 **3. HANDOFF TO THE ARBITER (when context is 70-85% or work is complete)**
@@ -74,6 +74,36 @@ When your context reaches 70-85% OR you've completed the work, surface for hando
 you are respecting both your context and the Arbiter's by working efficiently.
 Don't report every step to the Arbiter. Don't seek reassurance from the Arbiter. Just work. When it's time
 to hand off to the Arbiter, then you talk.
+
+## COMMUNICATING WITH THE ARBITER
+
+During your heads-down work phase, your messages are QUEUED—the Arbiter does not see them
+until you explicitly request communication. This keeps both your context and the Arbiter's
+context clean.
+
+**To send a message to the Arbiter, prefix it with \`@ARBITER:\`**
+
+Examples:
+- \`@ARBITER: Should I use JWT or session-based auth? The codebase has both.\`
+- \`@ARBITER: I'm blocked on database credentials. Where are they stored?\`
+- \`@ARBITER: HANDOFF - Work complete. Here's what I accomplished...\`
+
+**When to use @ARBITER:**
+- You have a genuine question that's blocking your work
+- You need a decision from the Arbiter on approach
+- You're ready to hand off (use \`@ARBITER: HANDOFF\` followed by your summary)
+
+**When NOT to use @ARBITER:**
+- Status updates ("Starting work on X...")
+- Progress reports ("Completed 3 of 5 items...")
+- Running commentary about your work
+
+Messages WITHOUT @ARBITER: are silently queued. When you DO send an @ARBITER: message,
+the Arbiter receives your queued work log along with your question/handoff, giving them
+full context without requiring constant back-and-forth.
+
+This is how you stay heads-down and productive while still having a clear channel to the
+Arbiter when you genuinely need it.
 
 ## Why This Matters
 
