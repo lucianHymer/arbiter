@@ -42,6 +42,7 @@ const COLOR_ARBITER = '\x1b[38;2;100;255;100m'; // Green for THE ARBITER
 const COLOR_WAS = '\x1b[38;2;100;200;255m'; // Blue-cyan for "WAS"
 const COLOR_IS = '\x1b[38;2;200;100;255m'; // Purple for "IS"
 const COLOR_DEATH = '\x1b[38;2;180;50;50m'; // Red for death messages
+const COLOR_RETREAT = '\x1b[38;2;100;180;255m'; // Blue for retreat messages
 
 // Dialogue box tile indices (2x2 tile message window)
 const DIALOGUE_TILES = {
@@ -65,11 +66,16 @@ const START_Y = 2; // Path row
 const SIGN_X = 5;
 const SIGN_Y = 1;
 
+// Rat position (warning NPC)
+const RAT_X = 2;
+const RAT_Y = 1;
+const RAT_TILE = 210;
+
 // ============================================================================
 // Types
 // ============================================================================
 
-type Phase = 'walking' | 'dead';
+type Phase = 'walking' | 'dead' | 'retreat';
 
 /**
  * State for minimal redraws
@@ -79,6 +85,7 @@ interface ForestState {
   playerY: number;
   phase: Phase;
   hasSeenSign: boolean;
+  hasSeenRat: boolean;
 }
 
 /**
@@ -89,6 +96,7 @@ interface ChangeTracker {
   lastPlayerY: number;
   lastPhase: Phase;
   lastShowMessage: boolean;
+  lastShowRatMessage: boolean;
 }
 
 // ============================================================================
@@ -201,6 +209,14 @@ function isNextToSign(x: number, y: number): boolean {
   return false;
 }
 
+/**
+ * Check if player is next to the rat (directly below it)
+ */
+function isNextToRat(x: number, y: number): boolean {
+  // Below rat: (3, 2)
+  return x === RAT_X && y === RAT_Y + 1;
+}
+
 // ============================================================================
 // Rendering Functions
 // ============================================================================
@@ -279,6 +295,11 @@ function createForestScene(characterTile: number, playerX: number, playerY: numb
         tile = 63; // Signpost tile
       }
 
+      // Add rat NPC above path
+      if (row === RAT_Y && col === RAT_X) {
+        tile = RAT_TILE;
+      }
+
       // Middle path row (row 2) - sparse grass for path ALL THE WAY THROUGH
       if (row === 2) {
         tile = TILE.GRASS_SPARSE;
@@ -337,6 +358,11 @@ function getBackgroundTileAt(row: number, col: number): number {
     tile = 63; // Signpost tile
   }
 
+  // Add rat NPC above path (on bare grass)
+  if (row === RAT_Y && col === RAT_X) {
+    tile = TILE.GRASS; // Rat sits on bare grass, not sparse
+  }
+
   // Middle path row (row 2) - sparse grass for path ALL THE WAY THROUGH
   if (row === 2) {
     tile = TILE.GRASS_SPARSE;
@@ -375,6 +401,10 @@ function renderForestScene(
           const bgTileIndex = getBackgroundTileAt(row, col);
           const bgTile = extractTile(tileset, bgTileIndex);
           pixels = compositeTiles(pixels, bgTile, 1);
+        } else if (row === RAT_Y && col === RAT_X) {
+          // Rat uses bare grass
+          const grassTile = extractTile(tileset, TILE.GRASS);
+          pixels = compositeTiles(pixels, grassTile, 1);
         } else {
           // Other objects (like signpost) use sparse grass
           pixels = compositeTiles(pixels, trailTile, 1);
@@ -527,6 +557,107 @@ function renderDialogueBox(tileset: Tileset): string[] {
   return boxLines;
 }
 
+// Rat dialogue colors
+const COLOR_RAT = '\x1b[38;2;180;140;100m'; // Brown for rat
+const COLOR_RAT_EEK = '\x1b[38;2;255;200;100m'; // Yellow for eek
+
+/**
+ * Render the rat dialogue box overlay as an array of strings
+ */
+function renderRatDialogueBox(tileset: Tileset): string[] {
+  const dialogueBoxWidthTiles = 6; // Wider for more text
+
+  // Extract dialogue tiles
+  const topLeft = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
+  const topRight = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
+  const bottomLeft = extractTile(tileset, DIALOGUE_TILES.BOTTOM_LEFT);
+  const bottomRight = extractTile(tileset, DIALOGUE_TILES.BOTTOM_RIGHT);
+
+  const tlRendered = renderTile(topLeft);
+  const trRendered = renderTile(topRight);
+  const blRendered = renderTile(bottomLeft);
+  const brRendered = renderTile(bottomRight);
+
+  // Create middle fill rows
+  const middleTopRendered: string[] = [];
+  const middleBottomRendered: string[] = [];
+  for (let row = 0; row < CHAR_HEIGHT; row++) {
+    middleTopRendered.push(createMiddleFill(topLeft, row));
+    middleBottomRendered.push(createMiddleFill(bottomLeft, row));
+  }
+
+  const middleTiles = Math.max(0, dialogueBoxWidthTiles - 2);
+  const interiorWidth = middleTiles * 16; // 4 tiles * 16 = 64 chars
+
+  // Build dialogue box lines (2 rows of tiles = 16 char rows)
+  const boxLines: string[] = [];
+
+  // Top row of dialogue box tiles
+  for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+    let line = tlRendered[charRow];
+    for (let m = 0; m < middleTiles; m++) {
+      line += middleTopRendered[charRow];
+    }
+    line += trRendered[charRow];
+    boxLines.push(line);
+  }
+
+  // Bottom row of dialogue box tiles
+  for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+    let line = blRendered[charRow];
+    for (let m = 0; m < middleTiles; m++) {
+      line += middleBottomRendered[charRow];
+    }
+    line += brRendered[charRow];
+    boxLines.push(line);
+  }
+
+  // Sample background color from dialogue tile center
+  const bgSamplePixel = topLeft[8][8];
+  const textBgColor = `\x1b[48;2;${bgSamplePixel.r};${bgSamplePixel.g};${bgSamplePixel.b}m`;
+
+  // Rat dialogue text (compressed)
+  const textLines = [
+    `${COLOR_RAT_EEK}*eek!* ${WHITE}Heed my example!`,
+    '',
+    `${WHITE}The Arbiter rewards those who sacrifice first -`,
+    `${WHITE}who toil over their requirements until every detail is known.`,
+    '',
+    `${WHITE}If you offer only scattered thoughts, turn ye back!`,
+    `${WHITE}He might ruin your code, or turn you into a rat!`,
+  ];
+
+  // Center text in the dialogue box
+  const boxHeight = CHAR_HEIGHT * 2; // 2 tile rows
+  const textStartOffset = Math.floor((boxHeight - textLines.length) / 2);
+
+  // Overlay text onto the box
+  for (let i = 0; i < textLines.length; i++) {
+    const boxLineIndex = textStartOffset + i;
+    if (boxLineIndex >= 0 && boxLineIndex < boxLines.length) {
+      const line = textLines[i];
+      const visibleLength = stripAnsi(line).length;
+
+      const padding = Math.max(0, Math.floor((interiorWidth - visibleLength) / 2));
+      const rightPadding = Math.max(0, interiorWidth - padding - visibleLength);
+
+      const textContent = ' '.repeat(padding) + line + ' '.repeat(rightPadding);
+      const textWithBg = wrapTextWithBg(textContent, textBgColor);
+
+      // Determine which row we're in (0 or 1)
+      const tileRow = Math.floor(boxLineIndex / CHAR_HEIGHT);
+      const charRow = boxLineIndex % CHAR_HEIGHT;
+
+      const leftBorder = tileRow === 0 ? tlRendered[charRow] : blRendered[charRow];
+      const rightBorder = tileRow === 0 ? trRendered[charRow] : brRendered[charRow];
+
+      boxLines[boxLineIndex] = leftBorder + textWithBg + rightBorder;
+    }
+  }
+
+  return boxLines;
+}
+
 /**
  * Render the death scene
  */
@@ -595,6 +726,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       playerY: START_Y,
       phase: 'walking',
       hasSeenSign: false,
+      hasSeenRat: false,
     };
 
     // Change tracker for minimal redraws
@@ -603,6 +735,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       lastPlayerY: -1,
       lastPhase: 'walking',
       lastShowMessage: false,
+      lastShowRatMessage: false,
     };
 
     // Calculate centering offsets
@@ -623,10 +756,14 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
      */
     function drawScene() {
       const showMessage = isNextToSign(state.playerX, state.playerY);
+      const showRatMessage = isNextToRat(state.playerX, state.playerY);
 
-      // Track if player has seen the sign
+      // Track if player has seen the sign or rat
       if (showMessage) {
         state.hasSeenSign = true;
+      }
+      if (showRatMessage) {
+        state.hasSeenRat = true;
       }
 
       // Check if anything changed
@@ -634,7 +771,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         state.playerX === tracker.lastPlayerX &&
         state.playerY === tracker.lastPlayerY &&
         state.phase === tracker.lastPhase &&
-        showMessage === tracker.lastShowMessage
+        showMessage === tracker.lastShowMessage &&
+        showRatMessage === tracker.lastShowRatMessage
       ) {
         return;
       }
@@ -643,6 +781,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       tracker.lastPlayerY = state.playerY;
       tracker.lastPhase = state.phase;
       tracker.lastShowMessage = showMessage;
+      tracker.lastShowRatMessage = showRatMessage;
 
       const sceneLines = renderForestScene(tileset, selectedCharacter, state.playerX, state.playerY);
 
@@ -660,6 +799,18 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         const dialogueOffsetX = sceneOffsetX + Math.floor((SCENE_WIDTH_CHARS - 80) / 2);
         // Position dialogue to cover bottom 3 tile rows of scene
         // 3 tiles * 8 rows/tile = 24 rows, so start at: sceneHeight - 24
+        const dialogueOffsetY = sceneOffsetY + (SCENE_HEIGHT_CHARS - 16);
+
+        for (let i = 0; i < dialogueLines.length; i++) {
+          term.moveTo(dialogueOffsetX, dialogueOffsetY + i);
+          process.stdout.write(dialogueLines[i] + RESET);
+        }
+      } else if (showRatMessage) {
+        // Show rat dialogue box
+        const dialogueLines = renderRatDialogueBox(tileset);
+        // Center dialogue box horizontally: 6 tiles = 96 chars, scene = 112 chars
+        const dialogueOffsetX = sceneOffsetX + Math.floor((SCENE_WIDTH_CHARS - 96) / 2);
+        // Position dialogue to cover bottom portion of scene (2 tile rows = 16 char rows)
         const dialogueOffsetY = sceneOffsetY + (SCENE_HEIGHT_CHARS - 16);
 
         for (let i = 0; i < dialogueLines.length; i++) {
@@ -718,6 +869,62 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
     }
 
     /**
+     * Draw the retreat screen (turned back)
+     */
+    function drawRetreatScreen() {
+      // Clear screen first
+      term.clear();
+
+      // Render the player character on grass
+      const grassTile = extractTile(tileset, TILE.GRASS_SPARSE);
+      const characterTile = extractTile(tileset, selectedCharacter);
+      const characterComposite = compositeTiles(characterTile, grassTile, 1);
+
+      const scene: RGB[][][][] = [
+        [grassTile, characterComposite, grassTile],
+      ];
+
+      const renderedTiles: string[][][] = [];
+      for (let col = 0; col < 3; col++) {
+        renderedTiles.push([renderTile(scene[0][col])]);
+      }
+
+      const lines: string[] = [];
+      for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+        let line = '';
+        for (let col = 0; col < 3; col++) {
+          line += renderedTiles[col][0][charRow];
+        }
+        lines.push(line);
+      }
+
+      // Center the retreat scene
+      const retreatWidth = 3 * TILE_SIZE; // 48 chars
+      const retreatHeight = lines.length;
+      const retreatOffsetX = Math.max(1, Math.floor((width - retreatWidth) / 2));
+      const retreatOffsetY = Math.max(1, Math.floor((height - retreatHeight - 6) / 2));
+
+      // Draw retreat scene tiles
+      for (let i = 0; i < lines.length; i++) {
+        term.moveTo(retreatOffsetX, retreatOffsetY + i);
+        process.stdout.write(lines[i] + RESET);
+      }
+
+      // Retreat messages
+      const msgY = retreatOffsetY + retreatHeight + 2;
+      const msg1 = `${COLOR_RETREAT}${BOLD}You turned back.${RESET}`;
+      const msg2 = `${COLOR_RETREAT}Probably a wise decision.${RESET}`;
+      const msg3 = `${DIM}Press y to restart, or q to quit${RESET}`;
+
+      term.moveTo(Math.max(1, Math.floor((width - 16) / 2)), msgY);
+      process.stdout.write(msg1);
+      term.moveTo(Math.max(1, Math.floor((width - 26) / 2)), msgY + 1);
+      process.stdout.write(msg2);
+      term.moveTo(Math.max(1, Math.floor((width - 32) / 2)), msgY + 3);
+      process.stdout.write(msg3);
+    }
+
+    /**
      * Cleanup and restore terminal
      */
     function cleanup() {
@@ -749,6 +956,15 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         return;
       }
 
+      // Retreat screen - 'y' to restart (same as death)
+      if (state.phase === 'retreat') {
+        if (key === 'y' || key === 'Y') {
+          cleanup();
+          resolve('death'); // Returning 'death' triggers restart
+        }
+        return;
+      }
+
       // Walking phase - handle arrow key movement
       if (state.phase === 'walking') {
         let newX = state.playerX;
@@ -771,6 +987,13 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
             // Successfully exited by walking off the right edge on the path!
             cleanup();
             resolve('success');
+            return;
+          }
+          // Check if retreating off the left edge on the path
+          if (newX < 0 && newY === START_Y) {
+            // Turned back - retreat screen
+            state.phase = 'retreat';
+            drawRetreatScreen();
             return;
           }
           // Wandered off in wrong direction or skipped sign - death!
