@@ -23,6 +23,31 @@ function sleep(ms: number): Promise<void> {
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000];  // 1s, 2s, 4s exponential backoff
 
+// Arbiter's allowed tools: MCP tools + read-only exploration
+const ARBITER_ALLOWED_TOOLS = [
+  'mcp__arbiter-tools__spawn_orchestrator',
+  'mcp__arbiter-tools__disconnect_orchestrators',
+  'Read',
+  'Glob',
+  'Grep',
+  'WebSearch',
+  'WebFetch',
+  'Task',  // For Explore subagent only
+] as const;
+
+// Orchestrator's allowed tools: full tool access for work
+const ORCHESTRATOR_ALLOWED_TOOLS = [
+  'Read',
+  'Write',
+  'Edit',
+  'Bash',
+  'Glob',
+  'Grep',
+  'Task',
+  'WebSearch',
+  'WebFetch',
+] as const;
+
 import type { AppState, OrchestratorState } from "./state.js";
 import {
   updateArbiterContext,
@@ -116,50 +141,56 @@ export type RouterCallbacks = {
 // Maximum context window size (200K tokens)
 const MAX_CONTEXT_TOKENS = 200000;
 
+// Context polling interval (1 minute)
+const CONTEXT_POLL_INTERVAL_MS = 60_000;
+
 /**
- * Context tracking state for a single session
+ * Poll context usage by forking a session and running /context
+ * Uses forkSession: true to avoid polluting the main conversation
  *
- * THE FORMULA (tested to <0.5% accuracy across low and heavy tool use):
- *   total = baseline + max(cache_read + cache_create) - first(cache_read + cache_create) + sum(input) + sum(output)
- *
- * - baseline: from /context at session start (~18.5k typically)
- * - first(cache_read + cache_create): "cached system overhead" (~15.4k typically)
- * - max(cache_read + cache_create): high water mark of combined metric
- * - sum(input) + sum(output): accumulated non-cached I/O tokens
- *
- * Key insight: tracking (cache_read + cache_create) as a combined metric handles:
- * - Non-monotonic cache_read drops (cache expiry, session resume)
- * - cache_create being absorbed into future cache_read
- * - Variable caching states across sessions
+ * @param sessionId - The session ID to fork and check
+ * @param sessionOptions - The session's original options (system prompt, tools, etc.)
+ * @returns Context percentage (0-100) or null if polling failed
  */
-interface ContextTracker {
-  baseline: number;           // From /context at startup
-  seenMsgIds: Set<string>;    // Dedupe by message.id (NOT uuid)
-  firstCombinedRC: number;    // First message's (cache_read + cache_create)
-  maxCombinedRC: number;      // Max(cache_read + cache_create) seen
-  sumInput: number;           // Sum of input_tokens
-  sumOutput: number;          // Sum of output_tokens
-}
+async function pollContextForSession(
+  sessionId: string,
+  sessionOptions: Partial<Options>
+): Promise<number | null> {
+  try {
+    const q = query({
+      prompt: '/context',
+      options: {
+        ...sessionOptions,
+        resume: sessionId,
+        forkSession: true,  // Fork to avoid polluting main session
+        permissionMode: 'bypassPermissions',
+        // Don't pass abortController - we want this to complete
+        abortController: undefined,
+      } as Options,
+    });
 
-function createContextTracker(baseline: number): ContextTracker {
-  return {
-    baseline,
-    seenMsgIds: new Set(),
-    firstCombinedRC: 0,
-    maxCombinedRC: 0,
-    sumInput: 0,
-    sumOutput: 0,
-  };
-}
+    let percent: number | null = null;
 
-function getContextTokens(tracker: ContextTracker): number {
-  // THE FORMULA: baseline + combined_growth + I/O
-  const combinedGrowth = tracker.maxCombinedRC - tracker.firstCombinedRC;
-  return tracker.baseline + combinedGrowth + tracker.sumInput + tracker.sumOutput;
-}
+    for await (const msg of q) {
+      // /context output comes through as user message with the token info
+      if (msg.type === 'user') {
+        const content = (msg as { message?: { content?: string } }).message?.content;
+        if (typeof content === 'string') {
+          // Match: **Tokens:** 18.4k / 200.0k (9%)
+          const match = content.match(/\*\*Tokens:\*\*\s*([0-9.]+)k\s*\/\s*200\.?0?k\s*\((\d+)%\)/i);
+          if (match) {
+            percent = parseInt(match[2], 10);
+          }
+        }
+      }
+    }
 
-function getContextPercent(tracker: ContextTracker): number {
-  return (getContextTokens(tracker) / MAX_CONTEXT_TOKENS) * 100;
+    return percent;
+  } catch (error) {
+    // Silently fail - context polling is best-effort
+    console.error('Context poll failed:', error);
+    return null;
+  }
 }
 
 /**
@@ -172,44 +203,9 @@ interface OrchestratorSession {
   sessionId: string;                    // SDK session ID for resuming
   query: ReturnType<typeof query> | null;  // The active query generator
   abortController: AbortController;     // For killing the session
-  contextTracker: ContextTracker;       // Context window tracking
   toolCallCount: number;                // Total tool calls made (was in Map, now here)
   queue: string[];                      // Queued messages awaiting flush to Arbiter
   lastActivityTime: number;             // For watchdog timeout detection
-}
-
-/**
- * Get baseline context by running /context with the same options as the agent.
- * This ensures the baseline reflects the agent's specific tools, system prompt, etc.
- */
-async function getBaseline(options: Partial<Options>): Promise<number> {
-  const q = query({
-    prompt: '/context',
-    options: {
-      ...options,
-      // Don't resume a session for baseline - we want fresh overhead
-      resume: undefined,
-    } as Options,
-  });
-
-  let baseline = 0;
-
-  for await (const msg of q) {
-    // /context output comes through as user message with <local-command-stdout>
-    if (msg.type === 'user') {
-      const content = (msg as { message?: { content?: string } }).message?.content;
-      if (typeof content === 'string') {
-        // Match: **Tokens:** 18.4k / 200.0k (9%)
-        const match = content.match(/\*\*Tokens:\*\*\s*([0-9.]+)k/i);
-        if (match) {
-          baseline = Math.round(parseFloat(match[1]) * 1000);
-        }
-      }
-    }
-  }
-
-  // Fallback to default if parsing failed
-  return baseline || 18500;
 }
 
 /**
@@ -406,9 +402,8 @@ export class Router {
   // Store MCP server for Arbiter session resumption
   private arbiterMcpServer: any = null;
 
-  // Context tracking for Arbiter session
-  // Baseline is fetched via /context with the same options as the agent
-  private arbiterContextTracker: ContextTracker | null = null;
+  // Context polling timer - polls /context once per minute via session forking
+  private contextPollInterval: NodeJS.Timeout | null = null;
 
   // Track crash recovery attempts for TUI display
   private crashCount = 0;
@@ -423,6 +418,76 @@ export class Router {
    */
   async start(): Promise<void> {
     await this.startArbiterSession();
+    this.startContextPolling();
+  }
+
+  /**
+   * Start the context polling timer
+   * Polls context for both Arbiter and Orchestrator (if active) once per minute
+   */
+  private startContextPolling(): void {
+    // Clear any existing interval
+    if (this.contextPollInterval) {
+      clearInterval(this.contextPollInterval);
+    }
+
+    // Poll immediately on start, then every minute
+    this.pollAllContexts();
+    this.contextPollInterval = setInterval(() => {
+      this.pollAllContexts();
+    }, CONTEXT_POLL_INTERVAL_MS);
+  }
+
+  /**
+   * Poll context for all active sessions
+   * Forks sessions and runs /context to get accurate values
+   */
+  private async pollAllContexts(): Promise<void> {
+    // Poll Arbiter context with its options
+    if (this.state.arbiterSessionId) {
+      const arbiterOptions: Partial<Options> = {
+        systemPrompt: ARBITER_SYSTEM_PROMPT,
+        mcpServers: this.arbiterMcpServer ? { "arbiter-tools": this.arbiterMcpServer } : undefined,
+        allowedTools: [...ARBITER_ALLOWED_TOOLS],
+      };
+      const arbiterPercent = await pollContextForSession(this.state.arbiterSessionId, arbiterOptions);
+      if (arbiterPercent !== null) {
+        updateArbiterContext(this.state, arbiterPercent);
+        this.callbacks.onDebugLog?.({
+          type: 'system',
+          text: `Context poll: Arbiter at ${arbiterPercent}%`,
+          agent: 'arbiter',
+        });
+      }
+    }
+
+    // Poll Orchestrator context if active with its options
+    let orchPercent: number | null = null;
+    if (this.currentOrchestratorSession?.sessionId) {
+      const orchOptions: Partial<Options> = {
+        systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+        allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
+        outputFormat: {
+          type: 'json_schema',
+          schema: orchestratorOutputJsonSchema,
+        },
+      };
+      orchPercent = await pollContextForSession(this.currentOrchestratorSession.sessionId, orchOptions);
+      if (orchPercent !== null) {
+        updateOrchestratorContext(this.state, orchPercent);
+        this.callbacks.onDebugLog?.({
+          type: 'system',
+          text: `Context poll: Orchestrator at ${orchPercent}%`,
+          agent: 'orchestrator',
+        });
+      }
+    }
+
+    // Notify TUI with updated values
+    this.callbacks.onContextUpdate(
+      this.state.arbiterContextPercent,
+      orchPercent
+    );
   }
 
   /**
@@ -439,6 +504,9 @@ export class Router {
     if (saved.orchestratorSessionId && saved.orchestratorNumber) {
       await this.resumeOrchestratorSession(saved.orchestratorSessionId, saved.orchestratorNumber);
     }
+
+    // Start context polling
+    this.startContextPolling();
   }
 
   /**
@@ -485,6 +553,12 @@ export class Router {
    * Clean shutdown of all sessions
    */
   async stop(): Promise<void> {
+    // Stop context polling timer
+    if (this.contextPollInterval) {
+      clearInterval(this.contextPollInterval);
+      this.contextPollInterval = null;
+    }
+
     // Stop watchdog timer
     this.stopWatchdog();
 
@@ -650,26 +724,12 @@ export class Router {
       abortController: this.arbiterAbortController,
       // Bypass permissions so MCP tools work without prompts
       permissionMode: 'bypassPermissions',
-      // Arbiter's allowed tools: MCP tools + read-only exploration
-      allowedTools: [
-        'mcp__arbiter-tools__spawn_orchestrator',
-        'mcp__arbiter-tools__disconnect_orchestrators',
-        'Read',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',  // For Explore subagent only
-      ],
+      allowedTools: [...ARBITER_ALLOWED_TOOLS],
       // Resume if we have an existing session
       ...(this.state.arbiterSessionId
         ? { resume: this.state.arbiterSessionId }
         : {}),
     };
-
-    // Get baseline context for Arbiter with its specific options
-    const arbiterBaseline = await getBaseline(options);
-    this.arbiterContextTracker = createContextTracker(arbiterBaseline);
 
     // Note: The Arbiter session runs continuously.
     // We'll send messages to it and process responses in a loop.
@@ -705,8 +765,8 @@ export class Router {
     // Create callbacks for hooks
     const orchestratorCallbacks: OrchestratorCallbacks = {
       onContextUpdate: (_sessionId: string, _percent: number) => {
-        // Context is now tracked from assistant messages via updateContextFromAssistant
-        // This callback exists for hook compatibility but is no longer the source of truth
+        // Context is now tracked via periodic polling (pollAllContexts)
+        // This callback exists for hook compatibility but is unused
       },
       onToolUse: (tool: string) => {
         // Increment tool count on the session
@@ -730,14 +790,12 @@ export class Router {
       },
     };
 
-    // Create hooks for context management
-    // The getContextPercent callback reads from our tracker for accurate context warnings
+    // Create hooks for tool use tracking
+    // Context is now tracked via polling, not hooks
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
-      (_sessionId: string) =>
-        this.currentOrchestratorSession
-          ? getContextPercent(this.currentOrchestratorSession.contextTracker)
-          : 0
+      // Context percent getter - returns state value (updated by polling)
+      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
     );
 
     // Query options for the Orchestrator session
@@ -747,27 +805,13 @@ export class Router {
       abortController: abortController,
       // Bypass permissions so tools work without prompts
       permissionMode: 'bypassPermissions',
-      // Orchestrators use all standard tools plus Task for subagents
-      allowedTools: [
-        "Read",
-        "Write",
-        "Edit",
-        "Bash",
-        "Glob",
-        "Grep",
-        "Task",
-        "WebSearch",
-        "WebFetch",
-      ],
+      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
       // Structured output for reliable routing decisions
       outputFormat: {
         type: 'json_schema',
         schema: orchestratorOutputJsonSchema,
       },
     };
-
-    // Get baseline context for Orchestrator with its specific options
-    const orchestratorBaseline = await getBaseline(options);
 
     // Create the orchestrator query
     const orchestratorQuery = query({
@@ -782,7 +826,6 @@ export class Router {
       sessionId: "", // Will be set when we get the init message
       query: orchestratorQuery,
       abortController,
-      contextTracker: createContextTracker(orchestratorBaseline),
       toolCallCount: 0,
       queue: [],
       lastActivityTime: Date.now(),
@@ -833,8 +876,8 @@ export class Router {
     // Create callbacks for hooks
     const orchestratorCallbacks: OrchestratorCallbacks = {
       onContextUpdate: (_sessionId: string, _percent: number) => {
-        // Context is now tracked from assistant messages via updateContextFromAssistant
-        // This callback exists for hook compatibility but is no longer the source of truth
+        // Context is now tracked via periodic polling (pollAllContexts)
+        // This callback exists for hook compatibility but is unused
       },
       onToolUse: (tool: string) => {
         // Increment tool count on the session
@@ -858,13 +901,12 @@ export class Router {
       },
     };
 
-    // Create hooks for context management
+    // Create hooks for tool use tracking
+    // Context is now tracked via polling, not hooks
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
-      (_sessionId: string) =>
-        this.currentOrchestratorSession
-          ? getContextPercent(this.currentOrchestratorSession.contextTracker)
-          : 0
+      // Context percent getter - returns state value (updated by polling)
+      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
     );
 
     // Query options for resuming the Orchestrator session
@@ -873,17 +915,7 @@ export class Router {
       hooks: hooks as Options["hooks"],
       abortController: abortController,
       permissionMode: 'bypassPermissions',
-      allowedTools: [
-        "Read",
-        "Write",
-        "Edit",
-        "Bash",
-        "Glob",
-        "Grep",
-        "Task",
-        "WebSearch",
-        "WebFetch",
-      ],
+      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
       outputFormat: {
         type: 'json_schema',
         schema: orchestratorOutputJsonSchema,
@@ -891,9 +923,6 @@ export class Router {
       // Resume the existing session
       resume: sessionId,
     };
-
-    // Get baseline context for Orchestrator with its specific options
-    const orchestratorBaseline = await getBaseline(options);
 
     // Create the orchestrator query with a continuation prompt (not introduction)
     const orchestratorQuery = query({
@@ -909,7 +938,6 @@ export class Router {
       sessionId: sessionId,  // Already known, don't set to empty string
       query: orchestratorQuery,
       abortController,
-      contextTracker: createContextTracker(orchestratorBaseline),
       toolCallCount: 0,
       queue: [],
       lastActivityTime: Date.now(),
@@ -959,17 +987,7 @@ export class Router {
       } : undefined,
       // Bypass permissions so MCP tools work without prompts
       permissionMode: 'bypassPermissions',
-      // Arbiter's allowed tools: MCP tools + read-only exploration
-      allowedTools: [
-        'mcp__arbiter-tools__spawn_orchestrator',
-        'mcp__arbiter-tools__disconnect_orchestrators',
-        'Read',
-        'Glob',
-        'Grep',
-        'WebSearch',
-        'WebFetch',
-        'Task',  // For Explore subagent only
-      ],
+      allowedTools: [...ARBITER_ALLOWED_TOOLS],
     };
 
     this.arbiterQuery = query({
@@ -1171,16 +1189,7 @@ export class Router {
               "arbiter-tools": this.arbiterMcpServer,
             } : undefined,
             permissionMode: 'bypassPermissions',
-            allowedTools: [
-              'mcp__arbiter-tools__spawn_orchestrator',
-              'mcp__arbiter-tools__disconnect_orchestrators',
-              'Read',
-              'Glob',
-              'Grep',
-              'WebSearch',
-              'WebFetch',
-              'Task',
-            ],
+            allowedTools: [...ARBITER_ALLOWED_TOOLS],
           };
 
           currentGenerator = query({
@@ -1243,15 +1252,6 @@ export class Router {
         // Extract text content from the assistant message
         const assistantMessage = message as SDKAssistantMessage;
 
-        // Track context from assistant messages (correct source)
-        if (this.arbiterContextTracker) {
-          this.updateContextFromAssistant(
-            assistantMessage,
-            this.arbiterContextTracker,
-            'arbiter'
-          );
-        }
-
         // Track tool use from Arbiter (MCP tools like spawn_orchestrator)
         this.trackToolUseFromAssistant(assistantMessage, 'arbiter');
 
@@ -1264,8 +1264,8 @@ export class Router {
         break;
 
       case "result":
-        // Result messages are logged for debugging but NOT used for context tracking
-        // Context is tracked from assistant messages (see updateContextFromAssistant)
+        // Result messages logged for debugging
+        // Context is tracked via periodic polling, not per-message
         break;
     }
   }
@@ -1328,17 +1328,7 @@ export class Router {
           abortController: this.currentOrchestratorSession.abortController,
           resume: this.currentOrchestratorSession.sessionId,
           permissionMode: 'bypassPermissions',
-          allowedTools: [
-            "Read",
-            "Write",
-            "Edit",
-            "Bash",
-            "Glob",
-            "Grep",
-            "Task",
-            "WebSearch",
-            "WebFetch",
-          ],
+          allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
           outputFormat: {
             type: 'json_schema',
             schema: orchestratorOutputJsonSchema,
@@ -1393,17 +1383,8 @@ export class Router {
         break;
 
       case "assistant":
-        // Track context from assistant messages (correct source)
-        const assistantMessage = message as SDKAssistantMessage;
-        if (this.currentOrchestratorSession) {
-          this.updateContextFromAssistant(
-            assistantMessage,
-            this.currentOrchestratorSession.contextTracker,
-            'orchestrator'
-          );
-        }
-        // Note: We don't extract text from assistant messages anymore
-        // The authoritative output comes from structured_output in result messages
+        // Note: Context is tracked via periodic polling, not per-message
+        // We don't extract text from assistant messages - output comes from structured_output
         break;
 
       case "result":
@@ -1427,95 +1408,6 @@ export class Router {
           }
         }
         break;
-    }
-  }
-
-  /**
-   * Update context tracking from an assistant message
-   *
-   * THE FORMULA: baseline + max(cache_read + cache_create) - first(cache_read + cache_create)
-   *
-   * Key insight: tracking (cache_read + cache_create) as a combined metric handles:
-   * - Non-monotonic cache_read drops (cache expiry, session resume)
-   * - cache_create being absorbed into future cache_read
-   * - Variable caching states across sessions
-   *
-   * Tested accuracy: ~0.9% error for both low-tool and heavy-tool scenarios
-   *
-   * Dedupes by message.id (NOT uuid - uuid is per streaming chunk)
-   */
-  private updateContextFromAssistant(
-    message: SDKAssistantMessage,
-    tracker: ContextTracker,
-    agent: 'arbiter' | 'orchestrator'
-  ): void {
-    const msg = message.message as any;
-    const usage = msg.usage;
-    if (!usage) return;
-
-    // CRITICAL: Dedupe by message.id, NOT uuid
-    // uuid is per streaming chunk, message.id is per API call
-    const msgId = msg.id;
-    if (!msgId || tracker.seenMsgIds.has(msgId)) return;
-    tracker.seenMsgIds.add(msgId);
-
-    const cacheRead = usage.cache_read_input_tokens || 0;
-    const cacheCreate = usage.cache_creation_input_tokens || 0;
-    const inputTokens = usage.input_tokens || 0;
-    const outputTokens = usage.output_tokens || 0;
-
-    // Combined metric: cache_read + cache_create
-    const combinedRC = cacheRead + cacheCreate;
-
-    // Capture first combined value as reference point
-    if (tracker.firstCombinedRC === 0) {
-      tracker.firstCombinedRC = combinedRC;
-    }
-
-    // Update tracking
-    tracker.maxCombinedRC = Math.max(tracker.maxCombinedRC, combinedRC);
-    tracker.sumInput += inputTokens;
-    tracker.sumOutput += outputTokens;
-
-    // Calculate context using THE FORMULA
-    const tokens = getContextTokens(tracker);
-    const pct = getContextPercent(tracker);
-    const combinedGrowth = tracker.maxCombinedRC - tracker.firstCombinedRC;
-
-    // Log for debugging
-    this.callbacks.onDebugLog?.({
-      type: 'system',
-      agent,
-      text: `Context: ${pct.toFixed(1)}% (${tokens.toLocaleString()} tokens)`,
-      details: {
-        messageId: msgId,
-        uniqueApiCalls: tracker.seenMsgIds.size,
-        formula: 'baseline + max(r+c) - first(r+c) + sum(i+o)',
-        baseline: tracker.baseline,
-        first_combined_rc: tracker.firstCombinedRC,
-        max_combined_rc: tracker.maxCombinedRC,
-        combined_growth: combinedGrowth,
-        sum_input: tracker.sumInput,
-        sum_output: tracker.sumOutput,
-        this_message: { cache_read: cacheRead, cache_create: cacheCreate, combined: combinedRC, input: inputTokens, output: outputTokens },
-        total_tokens: tokens,
-        percent: pct,
-      },
-    });
-
-    // Update state and notify callback
-    if (agent === 'arbiter') {
-      updateArbiterContext(this.state, pct);
-      const orchPct = this.currentOrchestratorSession
-        ? getContextPercent(this.currentOrchestratorSession.contextTracker)
-        : null;
-      this.callbacks.onContextUpdate(pct, orchPct);
-    } else {
-      updateOrchestratorContext(this.state, pct);
-      this.callbacks.onContextUpdate(
-        this.arbiterContextTracker ? getContextPercent(this.arbiterContextTracker) : 0,
-        pct
-      );
     }
   }
 

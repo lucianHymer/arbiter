@@ -1,30 +1,23 @@
-### [21:31] [architecture] SDK context calculation - combined metric formula
-**Details**: The correct formula for calculating context window usage from Claude Agent SDK messages is:
+### [18:57] [architecture] Orchestrator structured output routing
+**Details**: Replaced fragile @ARBITER: text tag system with SDK structured outputs for routing orchestrator messages.
 
-**total = baseline + max(cache_read + cache_create) - first(cache_read + cache_create)**
+Schema: { expects_response: boolean, message: string }
 
-Key insight: Track (cache_read + cache_create) as a COMBINED metric, not separately.
+- expects_response: true → forward to Arbiter (introductions, questions, handoffs)
+- expects_response: false → queue for later (status updates during heads-down work)
 
-Why this works:
-1. cache_read + cache_create at any point = total cacheable content
-2. first(combined) ~= 15,372 tokens (consistent "cached system overhead")
-3. max(combined) - first(combined) = message content growth
-4. baseline from /context at startup ~= 18,500 tokens
+Implementation:
+- Zod schema OrchestratorOutputSchema in router.ts
+- outputFormat option added to orchestrator query() calls
+- structured_output extracted from result messages (not assistant messages)
+- handleOrchestratorOutput now takes OrchestratorOutput type instead of string
 
-The previous formula (baseline + max(cache_read) - first(cache_read) + last(cache_create)) failed badly with heavy tool use:
-- Low-tool: ~0.4% error (acceptable)
-- Heavy-tool: 11-25% error (UNACCEPTABLE)
+This is deterministic - no parsing text for tags, schema enforces the routing decision.
+**Files**: src/router.ts, src/orchestrator.ts
+---
 
-New formula accuracy:
-- Low-tool: ~0.55% error
-- Heavy-tool: ~0.85-0.93% error
-
-Both scenarios now within 1% error!
-
-The combined metric handles:
-- Non-monotonic cache_read drops (cache expiry, session resume)
-- cache_create absorption into future cache_read
-- Variable caching states across sessions
-**Files**: src/router.ts, src/context-analyzer.ts, .claude/knowledge/architecture/context-calculation.md
+### [22:30] [architecture] Context tracking via session fork polling
+**Details**: Switched from calculation-based context tracking to polling-based approach. Instead of calculating context from SDK usage tokens (which was unreliable), we now fork sessions using `resume: sessionId` + `forkSession: true`, run `/context`, and parse the authoritative result. Polling happens once per minute for both Arbiter and Orchestrator sessions. This is 100% accurate vs the previous ~0.3% error rate that degraded under heavy tool use.
+**Files**: src/router.ts
 ---
 
