@@ -9,6 +9,9 @@
 // Re-export the terminal-kit based TUI
 export { createTUI, type TUI } from './tui-termkit.js';
 
+// Re-export the terminal-kit based TitleScreen
+export { showTitleScreen } from './screens/TitleScreen-termkit.js';
+
 // Re-export the terminal-kit based ForestIntro
 export { showForestIntro } from './screens/ForestIntro-termkit.js';
 

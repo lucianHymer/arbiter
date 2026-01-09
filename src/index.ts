@@ -3,7 +3,7 @@
 
 import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
-import { createTUI, TUI, showCharacterSelect, showForestIntro } from './tui/index.js';
+import { createTUI, TUI, showTitleScreen, showCharacterSelect, showForestIntro } from './tui/index.js';
 
 /**
  * Session information for persistence on exit
@@ -76,7 +76,10 @@ async function main(): Promise<void> {
   });
 
   try {
-    // Show character selection screen first
+    // Show title screen first (any key continues)
+    await showTitleScreen();
+
+    // Show character selection screen
     let selectResult = await showCharacterSelect();
     let selectedCharacter = selectResult.character;
 
