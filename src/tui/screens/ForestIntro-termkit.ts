@@ -639,18 +639,10 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         return;
       }
 
-      // Check if message visibility changed - need to clear if it was showing
-      const needsClear = tracker.lastShowMessage && !showMessage;
-
       tracker.lastPlayerX = state.playerX;
       tracker.lastPlayerY = state.playerY;
       tracker.lastPhase = state.phase;
       tracker.lastShowMessage = showMessage;
-
-      // Clear screen if message box needs to disappear
-      if (needsClear) {
-        term.clear();
-      }
 
       const sceneLines = renderForestScene(tileset, selectedCharacter, state.playerX, state.playerY);
 
