@@ -73,6 +73,7 @@ interface TUIState {
 
   // Input state
   inputBuffer: string;
+  cursorPos: number;  // Cursor position (index into inputBuffer)
   mode: 'NORMAL' | 'INSERT';
 
   // Status info
@@ -102,9 +103,10 @@ interface RedrawTracker {
   lastMessageCount: number;
   lastContextPercent: number;
   lastTool: string | null;
-  lastWaitingFor: WaitingState;
   lastChatWaitingFor: WaitingState;
   lastChatAnimFrame: number;
+  lastCursorPos: number;
+  lastInputHeight: number;
 }
 
 // ============================================================================
@@ -126,6 +128,9 @@ const ANIMATION_INTERVAL = 250; // ms
 // Debug log file (temporary, cleared each session)
 const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
 
+// Input area
+const MAX_INPUT_LINES = 5; // Maximum visible lines in input area
+
 // Colors
 const COLORS = {
   human: '\x1b[32m', // green
@@ -144,7 +149,35 @@ const term = termKit.terminal;
 // Layout Calculations
 // ============================================================================
 
-function getLayout() {
+/**
+ * Calculate how many lines the input buffer needs when wrapped
+ * @param text The input text (may contain newlines)
+ * @param width Available width for text (excluding prompt)
+ * @returns Number of lines needed (displayLines capped at MAX_INPUT_LINES, totalLines is actual count)
+ */
+function calculateInputLines(text: string, width: number): { displayLines: number; totalLines: number } {
+  if (!text || width <= 0) return { displayLines: 1, totalLines: 1 };
+
+  // Split by actual newlines first
+  const paragraphs = text.split('\n');
+  let totalLines = 0;
+
+  for (const para of paragraphs) {
+    if (para.length === 0) {
+      totalLines += 1; // Empty line
+    } else {
+      // Calculate wrapped lines for this paragraph
+      totalLines += Math.ceil(para.length / width);
+    }
+  }
+
+  return {
+    displayLines: Math.min(Math.max(1, totalLines), MAX_INPUT_LINES),
+    totalLines: Math.max(1, totalLines)
+  };
+}
+
+function getLayout(inputText: string = '') {
   let width = 180;
   let height = 50;
 
@@ -163,12 +196,18 @@ function getLayout() {
 
   // Right side: chat, status, input
   const chatAreaX = TILE_AREA_WIDTH + 3; // Leave 1 col gap
-  const chatAreaY = 1;
   const chatAreaWidth = Math.max(40, width - chatAreaX - 1);
-  const chatAreaHeight = height - 4; // Leave room for status and input
 
-  const statusY = height - 2;
-  const inputY = height - 1;
+  // Calculate dynamic input area height based on content
+  const inputTextWidth = chatAreaWidth - 3; // -3 for prompt "> " and cursor space
+  const { displayLines: inputLines } = calculateInputLines(inputText, inputTextWidth);
+
+  // Input area at bottom, status bar above it, context bar above that, chat fills remaining space
+  const inputY = height - inputLines + 1;  // +1 because 1-indexed
+  const statusY = inputY - 1;
+  const contextY = statusY - 1;  // Context bar above status
+  const chatAreaY = 1;
+  const chatAreaHeight = contextY - 1; // Chat goes up to context bar
 
   return {
     width,
@@ -187,15 +226,21 @@ function getLayout() {
       width: chatAreaWidth,
       height: chatAreaHeight,
     },
+    contextBar: {
+      x: chatAreaX,
+      y: contextY,
+      width: chatAreaWidth,
+    },
     statusBar: {
       x: chatAreaX,
       y: statusY,
       width: chatAreaWidth,
     },
-    inputLine: {
+    inputArea: {
       x: chatAreaX,
       y: inputY,
       width: chatAreaWidth,
+      height: inputLines,
     },
   };
 }
@@ -219,6 +264,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     messages: [],
     scrollOffset: 0,
     inputBuffer: '',
+    cursorPos: 0,
     mode: 'INSERT', // Start in insert mode
     arbiterContextPercent: 0,
     orchestratorContextPercent: null,
@@ -240,9 +286,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     lastMessageCount: -1,
     lastContextPercent: -1,
     lastTool: null,
-    lastWaitingFor: 'none',
     lastChatWaitingFor: 'none',
     lastChatAnimFrame: -1,
+    lastCursorPos: -1,
+    lastInputHeight: 1,
   };
 
   // Callbacks
@@ -321,7 +368,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (inLogViewer) return;
 
     if (!state.tileset) return;
-    const layout = getLayout();
+    const layout = getLayout(state.inputBuffer);
 
     // Draw filler rows above the scene (build from scene upward, so cut-off is at top edge)
     const rowsAbove = layout.tileArea.fillerRowsAbove;
@@ -396,7 +443,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastChatWaitingFor = state.waitingFor;
     tracker.lastChatAnimFrame = state.blinkCycle;
 
-    const layout = getLayout();
+    const layout = getLayout(state.inputBuffer);
     const visibleLines = layout.chatArea.height;
 
     // Calculate max scroll
@@ -472,28 +519,72 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
-   * Draw status bar - only redraws if status changed
+   * Draw context bar - shows Arbiter %, Conjuring %, and tool info
    */
-  function drawStatus(force: boolean = false) {
+  function drawContext(force: boolean = false) {
+    // Skip drawing if log viewer is open
+    if (inLogViewer) return;
+
     const contextChanged =
       state.arbiterContextPercent !== tracker.lastContextPercent ||
-      state.currentTool !== tracker.lastTool ||
-      state.waitingFor !== tracker.lastWaitingFor;
+      state.currentTool !== tracker.lastTool;
 
     if (!force && !contextChanged) return;
 
+    // Update trackers
     tracker.lastContextPercent = state.arbiterContextPercent;
     tracker.lastTool = state.currentTool;
-    tracker.lastWaitingFor = state.waitingFor;
 
-    const layout = getLayout();
+    const layout = getLayout(state.inputBuffer);
+    const contextX = layout.contextBar.x;
+    const contextY = layout.contextBar.y;
+
+    // Clear the context line (only chat area width, not the tile scene)
+    term.moveTo(contextX, contextY);
+    process.stdout.write(' '.repeat(layout.contextBar.width));
+
+    // Build context info
+    let contextInfo = '';
+
+    // Arbiter context
+    const arbiterCtx = `Arbiter: ${state.arbiterContextPercent.toFixed(1)}%`;
+    contextInfo += `\x1b[33m${arbiterCtx}\x1b[0m`;
+
+    // Orchestrator context
+    if (state.orchestratorContextPercent !== null) {
+      const orchCtx = `  ·  Conjuring: ${state.orchestratorContextPercent.toFixed(1)}%`;
+      contextInfo += `\x1b[36m${orchCtx}\x1b[0m`;
+    }
+
+    // Tool info
+    if (state.currentTool) {
+      const toolInfo = `  ·  ${state.currentTool} (${state.toolCallCount})`;
+      contextInfo += `\x1b[35m${toolInfo}\x1b[0m`;
+    }
+
+    term.moveTo(contextX, contextY);
+    process.stdout.write(contextInfo);
+  }
+
+  /**
+   * Draw status bar - only redraws if mode changed
+   * Shows mode indicator and keyboard hints only (context info is on separate line above)
+   */
+  function drawStatus(force: boolean = false) {
+    // Skip drawing if log viewer is open
+    if (inLogViewer) return;
+
+    const modeChanged = state.mode !== tracker.lastMode;
+
+    if (!force && !modeChanged) return;
+
+    const layout = getLayout(state.inputBuffer);
     const statusX = layout.statusBar.x;
     const statusY = layout.statusBar.y;
-    const statusWidth = layout.statusBar.width;
 
-    // Clear the status line
+    // Clear the status line (only chat area width, not the tile scene)
     term.moveTo(statusX, statusY);
-    process.stdout.write(' '.repeat(statusWidth));
+    process.stdout.write(' '.repeat(layout.statusBar.width));
 
     // Exit confirmation mode - show special prompt
     if (state.pendingExit) {
@@ -510,88 +601,213 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       return;
     }
 
-    // Build left side (mode + hints)
-    let leftSide = '';
-    let leftLen = 0; // Track visible length (no ANSI codes)
+    // Build status line (mode + hints only - context info is now on separate line)
+    let statusLine = '';
 
     if (state.mode === 'INSERT') {
-      leftSide += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      leftSide += '\x1b[2m    esc:normal  ·  <ctrl-c>:quit \x1b[0m'; // Dim hint with spacing
-      leftLen = 8 + 34; // " INSERT " + "    esc:normal  ·  <ctrl-c>:quit "
+      statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
+      statusLine += '\x1b[2m    esc:normal  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
     } else {
-      leftSide += '\x1b[48;2;130;44;19m\x1b[97m NORMAL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      leftSide += '\x1b[2m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m'; // Dim hint with spacing
-      leftLen = 8 + 57; // " NORMAL " + "    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit "
+      statusLine += '\x1b[48;2;130;44;19m\x1b[97m NORMAL \x1b[0m'; // Brown bg (130,44,19), bright white text
+      statusLine += '\x1b[2m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
     }
-
-    // Build right side (context + tool + waiting)
-    let rightSide = '';
-    let rightLen = 0;
-
-    // Context percentage
-    const arbiterCtx = `Arbiter: ${state.arbiterContextPercent.toFixed(1)}%`;
-    rightSide += `\x1b[33m${arbiterCtx}\x1b[0m`;
-    rightLen += arbiterCtx.length;
-
-    if (state.orchestratorContextPercent !== null) {
-      const orchCtx = ` | Conjuring: ${state.orchestratorContextPercent.toFixed(1)}%`;
-      rightSide += `\x1b[36m${orchCtx}\x1b[0m`;
-      rightLen += orchCtx.length;
-    }
-
-    // Tool info
-    if (state.currentTool) {
-      const toolInfo = ` | ${state.currentTool} (${state.toolCallCount})`;
-      rightSide += `\x1b[35m${toolInfo}\x1b[0m`;
-      rightLen += toolInfo.length;
-    }
-
-    // Waiting indicator
-    if (state.waitingFor !== 'none') {
-      const dots = '.'.repeat((state.animationFrame % 3) + 1);
-      const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
-      const waitInfo = ` | ${waiting} thinking${dots}`;
-      rightSide += `\x1b[2m${waitInfo}\x1b[0m`;
-      rightLen += waitInfo.length;
-    }
-
-    // Calculate spacing between left and right
-    const spacing = Math.max(1, statusWidth - leftLen - rightLen);
 
     term.moveTo(statusX, statusY);
-    process.stdout.write(leftSide + ' '.repeat(spacing) + rightSide);
+    process.stdout.write(statusLine);
   }
 
   /**
-   * Draw input line - only redraws if input changed
+   * Draw input area - only redraws if input changed
+   * Now supports multi-line input (1-5 lines based on content)
    */
   function drawInput(force: boolean = false) {
-    const inputChanged = state.inputBuffer !== tracker.lastInputBuffer || state.mode !== tracker.lastMode;
+    const layout = getLayout(state.inputBuffer);
+    const inputHeight = layout.inputArea.height;
 
-    if (!force && !inputChanged) return;
+    const inputChanged = state.inputBuffer !== tracker.lastInputBuffer ||
+                         state.mode !== tracker.lastMode ||
+                         state.cursorPos !== tracker.lastCursorPos;
+    const heightChanged = inputHeight !== tracker.lastInputHeight;
+
+    if (!force && !inputChanged && !heightChanged) return;
+
+    // Handle input height changes - need to clear old areas and redraw context/status
+    if (heightChanged) {
+      // Calculate where the OLD context bar was (before height change)
+      const oldInputHeight = tracker.lastInputHeight;
+      const oldInputY = layout.height - oldInputHeight + 1;
+      const oldStatusY = oldInputY - 1;
+      const oldContextY = oldStatusY - 1;
+
+      // New context position
+      const newContextY = layout.contextBar.y;
+
+      // Clear from the higher of old/new context positions down to bottom
+      // This ensures ghost lines are cleared when input shrinks
+      const clearStartY = Math.min(oldContextY, newContextY);
+
+      for (let y = clearStartY; y <= layout.height; y++) {
+        if (y >= 1) {
+          term.moveTo(layout.inputArea.x, y);
+          // Only clear chat area width, not the tile scene on the left
+          process.stdout.write(' '.repeat(layout.inputArea.width));
+        }
+      }
+
+      tracker.lastInputHeight = inputHeight;
+
+      // Redraw context and status at their new positions
+      drawContext(true);
+      drawStatus(true);
+    }
 
     tracker.lastInputBuffer = state.inputBuffer;
     tracker.lastMode = state.mode;
+    tracker.lastCursorPos = state.cursorPos;
 
-    const layout = getLayout();
-    const inputX = layout.inputLine.x;
-    const inputY = layout.inputLine.y;
-    const inputWidth = layout.inputLine.width;
+    const inputX = layout.inputArea.x;
+    const inputY = layout.inputArea.y;
+    const inputWidth = layout.inputArea.width;
 
-    // Clear the input line
-    term.moveTo(inputX, inputY);
-    process.stdout.write(' '.repeat(inputWidth));
-
-    // Draw input with cursor
-    term.moveTo(inputX, inputY);
-    if (state.mode === 'INSERT') {
-      term.cyan('> ');
-      term.white(state.inputBuffer.substring(0, inputWidth - 4));
-      term.bgWhite.black(' '); // Cursor
-    } else {
-      term.blue(': ');
-      term.white(state.inputBuffer.substring(0, inputWidth - 4));
+    // Clear all input lines
+    for (let i = 0; i < inputHeight; i++) {
+      term.moveTo(inputX, inputY + i);
+      process.stdout.write(' '.repeat(inputWidth));
     }
+
+    // Wrap input text for multi-line display
+    const promptWidth = 2; // "> " or ": "
+    const textWidth = inputWidth - promptWidth - 1; // -1 for cursor space
+    const wrappedLines = wrapInputText(state.inputBuffer, textWidth);
+
+    // Calculate cursor position in wrapped lines
+    // Need to map state.cursorPos (char index in inputBuffer) to (line, col) in wrappedLines
+    let cursorLine = 0;
+    let cursorCol = 0;
+
+    if (state.inputBuffer.length > 0) {
+      // Walk through the input buffer to find which wrapped line the cursor is on
+      const paragraphs = state.inputBuffer.split('\n');
+      let charIndex = 0;
+      let lineIndex = 0;
+      let found = false;
+
+      outer: for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+        const para = paragraphs[pIdx];
+
+        if (para.length === 0) {
+          // Empty paragraph (from newline)
+          if (state.cursorPos === charIndex) {
+            cursorLine = lineIndex;
+            cursorCol = 0;
+            found = true;
+            break outer;
+          }
+          lineIndex++;
+        } else {
+          // Wrap the paragraph
+          for (let i = 0; i < para.length; i += textWidth) {
+            const lineEnd = Math.min(i + textWidth, para.length);
+
+            // Check if cursor is in this line segment
+            if (state.cursorPos >= charIndex + i && state.cursorPos < charIndex + lineEnd) {
+              cursorLine = lineIndex;
+              cursorCol = state.cursorPos - charIndex - i;
+              found = true;
+              break outer;
+            }
+            // Check if cursor is exactly at the end of this line segment (but before next line)
+            if (state.cursorPos === charIndex + lineEnd && lineEnd === para.length) {
+              // Cursor at end of paragraph - show at end of this line
+              cursorLine = lineIndex;
+              cursorCol = lineEnd - i;
+              found = true;
+              break outer;
+            }
+            lineIndex++;
+          }
+          charIndex += para.length;
+        }
+
+        // Add 1 for newline between paragraphs (except after last)
+        if (pIdx < paragraphs.length - 1) {
+          if (state.cursorPos === charIndex) {
+            // Cursor is right at the newline - show at start of next line
+            cursorLine = lineIndex;
+            cursorCol = 0;
+            found = true;
+            break outer;
+          }
+          charIndex++; // For the \n
+        }
+      }
+
+      // Handle cursor at very end of input
+      if (!found || state.cursorPos >= state.inputBuffer.length) {
+        cursorLine = wrappedLines.length - 1;
+        cursorCol = wrappedLines[cursorLine]?.length || 0;
+      }
+    }
+
+    // Adjust scroll to keep cursor visible
+    let adjustedStartLine = Math.max(0, wrappedLines.length - inputHeight);
+    if (cursorLine < adjustedStartLine) {
+      adjustedStartLine = cursorLine;
+    } else if (cursorLine >= adjustedStartLine + inputHeight) {
+      adjustedStartLine = cursorLine - inputHeight + 1;
+    }
+
+    // Get final visible lines after scroll adjustment
+    const visibleLines = wrappedLines.slice(adjustedStartLine, adjustedStartLine + inputHeight);
+
+    // Draw each line
+    for (let i = 0; i < visibleLines.length; i++) {
+      term.moveTo(inputX, inputY + i);
+      if (i === 0 && adjustedStartLine === 0) {
+        // First line gets the prompt
+        if (state.mode === 'INSERT') {
+          term.cyan('> ');
+        } else {
+          term.blue(': ');
+        }
+      } else {
+        // Continuation lines get indent to align with text
+        process.stdout.write('  ');
+      }
+      term.white(visibleLines[i]);
+    }
+
+    // Draw cursor at calculated position (only in INSERT mode)
+    if (state.mode === 'INSERT') {
+      const visibleCursorLine = cursorLine - adjustedStartLine;
+      if (visibleCursorLine >= 0 && visibleCursorLine < inputHeight) {
+        term.moveTo(inputX + promptWidth + cursorCol, inputY + visibleCursorLine);
+        term.bgWhite.black(' ');
+      }
+    }
+  }
+
+  /**
+   * Wrap input text for multi-line display
+   */
+  function wrapInputText(text: string, width: number): string[] {
+    if (!text || width <= 0) return [''];
+
+    const lines: string[] = [];
+    const paragraphs = text.split('\n');
+
+    for (const para of paragraphs) {
+      if (para.length === 0) {
+        lines.push('');
+      } else {
+        // Break paragraph into lines of 'width' characters
+        for (let i = 0; i < para.length; i += width) {
+          lines.push(para.substring(i, i + width));
+        }
+      }
+    }
+
+    return lines.length > 0 ? lines : [''];
   }
 
   /**
@@ -606,11 +822,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastMessageCount = -1;
     tracker.lastContextPercent = -1;
     tracker.lastTool = null;
-    tracker.lastWaitingFor = 'none';
+    tracker.lastInputHeight = 1;
 
     term.clear();
     drawTiles(true);
     drawChat(true);
+    drawContext(true);
     drawStatus(true);
     drawInput(true);
   }
@@ -702,7 +919,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     });
 
     // Auto-scroll to bottom
-    const layout = getLayout();
+    const layout = getLayout(state.inputBuffer);
     const totalLines = state.messages.reduce((acc, msg) => {
       return acc + getMessageLineCount(msg, layout.chatArea.width);
     }, 0);
@@ -723,6 +940,119 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }
   }
 
+  /**
+   * Calculate the visual line and column position for a cursor index
+   * @param text The input buffer text
+   * @param cursorPos The cursor position (index into text)
+   * @param lineWidth The width of each line for wrapping
+   * @returns { line: number, col: number, totalLines: number }
+   */
+  function getCursorLineCol(text: string, cursorPos: number, lineWidth: number): { line: number; col: number; totalLines: number } {
+    if (!text || lineWidth <= 0) {
+      return { line: 0, col: 0, totalLines: 1 };
+    }
+
+    const paragraphs = text.split('\n');
+    let charIndex = 0;
+    let lineIndex = 0;
+
+    for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+      const para = paragraphs[pIdx];
+
+      if (para.length === 0) {
+        // Empty paragraph
+        if (cursorPos === charIndex) {
+          return { line: lineIndex, col: 0, totalLines: countTotalLines(text, lineWidth) };
+        }
+        lineIndex++;
+      } else {
+        // Non-empty paragraph - may wrap across multiple lines
+        for (let i = 0; i < para.length; i += lineWidth) {
+          const lineStart = charIndex + i;
+          const lineEnd = charIndex + Math.min(i + lineWidth, para.length);
+
+          if (cursorPos >= lineStart && cursorPos < lineEnd) {
+            return { line: lineIndex, col: cursorPos - lineStart, totalLines: countTotalLines(text, lineWidth) };
+          }
+          // Cursor at end of this wrapped segment (and it's the last segment of paragraph)
+          if (cursorPos === lineEnd && i + lineWidth >= para.length) {
+            return { line: lineIndex, col: cursorPos - lineStart, totalLines: countTotalLines(text, lineWidth) };
+          }
+          lineIndex++;
+        }
+        charIndex += para.length;
+      }
+
+      // Handle newline between paragraphs
+      if (pIdx < paragraphs.length - 1) {
+        if (cursorPos === charIndex) {
+          // Cursor at the newline - show at start of next line
+          return { line: lineIndex, col: 0, totalLines: countTotalLines(text, lineWidth) };
+        }
+        charIndex++; // For the \n
+      }
+    }
+
+    // Cursor at very end
+    return { line: lineIndex - 1, col: text.length - charIndex + (paragraphs[paragraphs.length - 1]?.length || 0), totalLines: countTotalLines(text, lineWidth) };
+  }
+
+  /**
+   * Count total wrapped lines for a text
+   */
+  function countTotalLines(text: string, lineWidth: number): number {
+    if (!text || lineWidth <= 0) return 1;
+    const paragraphs = text.split('\n');
+    let total = 0;
+    for (const para of paragraphs) {
+      total += para.length === 0 ? 1 : Math.ceil(para.length / lineWidth);
+    }
+    return Math.max(1, total);
+  }
+
+  /**
+   * Convert a line/column position back to a cursor index
+   * @param text The input buffer text
+   * @param targetLine The target line number
+   * @param targetCol The target column (will be clamped to line length)
+   * @param lineWidth The width of each line for wrapping
+   * @returns The cursor position (index into text)
+   */
+  function lineToCursorPos(text: string, targetLine: number, targetCol: number, lineWidth: number): number {
+    if (!text || lineWidth <= 0) return 0;
+
+    const paragraphs = text.split('\n');
+    let charIndex = 0;
+    let lineIndex = 0;
+
+    for (let pIdx = 0; pIdx < paragraphs.length; pIdx++) {
+      const para = paragraphs[pIdx];
+
+      if (para.length === 0) {
+        if (lineIndex === targetLine) {
+          return charIndex; // Can only be at col 0 for empty line
+        }
+        lineIndex++;
+      } else {
+        for (let i = 0; i < para.length; i += lineWidth) {
+          if (lineIndex === targetLine) {
+            const lineLen = Math.min(lineWidth, para.length - i);
+            const col = Math.min(targetCol, lineLen);
+            return charIndex + i + col;
+          }
+          lineIndex++;
+        }
+        charIndex += para.length;
+      }
+
+      if (pIdx < paragraphs.length - 1) {
+        charIndex++; // For the \n
+      }
+    }
+
+    return text.length; // Default to end
+  }
+
   function handleInsertModeKey(key: string) {
     switch (key) {
       case 'ESCAPE':
@@ -732,9 +1062,22 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         break;
 
       case 'ENTER':
+        // Check if character before cursor is a backslash (line continuation)
+        if (state.cursorPos > 0 && state.inputBuffer[state.cursorPos - 1] === '\\') {
+          // Remove the backslash and insert newline
+          state.inputBuffer =
+            state.inputBuffer.slice(0, state.cursorPos - 1) +
+            '\n' +
+            state.inputBuffer.slice(state.cursorPos);
+          // cursorPos stays the same (backslash removed, newline added = net zero change)
+          drawInput();
+          break;
+        }
+        // Normal submit behavior
         if (state.inputBuffer.trim()) {
           const text = state.inputBuffer.trim();
           state.inputBuffer = '';
+          state.cursorPos = 0;
           if (inputCallback) {
             inputCallback(text);
           }
@@ -743,14 +1086,85 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         break;
 
       case 'BACKSPACE':
-        state.inputBuffer = state.inputBuffer.slice(0, -1);
+        if (state.cursorPos > 0) {
+          // Delete character before cursor
+          state.inputBuffer =
+            state.inputBuffer.slice(0, state.cursorPos - 1) +
+            state.inputBuffer.slice(state.cursorPos);
+          state.cursorPos--;
+        }
         drawInput();
         break;
+
+      case 'DELETE':
+        if (state.cursorPos < state.inputBuffer.length) {
+          // Delete character at cursor
+          state.inputBuffer =
+            state.inputBuffer.slice(0, state.cursorPos) +
+            state.inputBuffer.slice(state.cursorPos + 1);
+        }
+        drawInput();
+        break;
+
+      case 'LEFT':
+        if (state.cursorPos > 0) {
+          state.cursorPos--;
+          drawInput();
+        }
+        break;
+
+      case 'RIGHT':
+        if (state.cursorPos < state.inputBuffer.length) {
+          state.cursorPos++;
+          drawInput();
+        }
+        break;
+
+      case 'HOME':
+        state.cursorPos = 0;
+        drawInput();
+        break;
+
+      case 'END':
+        state.cursorPos = state.inputBuffer.length;
+        drawInput();
+        break;
+
+      case 'UP': {
+        const layout = getLayout(state.inputBuffer);
+        const textWidth = layout.inputArea.width - 3; // Match drawInput calculation
+        const { line, col, totalLines } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
+
+        if (line > 0) {
+          // Move to previous line, same column (or end if shorter)
+          state.cursorPos = lineToCursorPos(state.inputBuffer, line - 1, col, textWidth);
+          drawInput();
+        }
+        break;
+      }
+
+      case 'DOWN': {
+        const layout = getLayout(state.inputBuffer);
+        const textWidth = layout.inputArea.width - 3;
+        const { line, col, totalLines } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
+
+        if (line < totalLines - 1) {
+          // Move to next line, same column (or end if shorter)
+          state.cursorPos = lineToCursorPos(state.inputBuffer, line + 1, col, textWidth);
+          drawInput();
+        }
+        break;
+      }
 
       default:
         // Regular character
         if (key.length === 1 && key.charCodeAt(0) >= 32 && key.charCodeAt(0) < 127) {
-          state.inputBuffer += key;
+          // Insert character at cursor position
+          state.inputBuffer =
+            state.inputBuffer.slice(0, state.cursorPos) +
+            key +
+            state.inputBuffer.slice(state.cursorPos);
+          state.cursorPos++;
           drawInput();
         }
         break;
@@ -786,7 +1200,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       case 'G':
         // Scroll to bottom
-        const layout = getLayout();
+        const layout = getLayout(state.inputBuffer);
         const totalLines = state.messages.reduce((acc, msg) => {
           return acc + getMessageLineCount(msg, layout.chatArea.width);
         }, 0);
@@ -1033,9 +1447,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawTiles();
         drawChat(); // Update chat working indicator
       }
-
-      // Always update status (for the dots animation)
-      drawStatus();
     }, ANIMATION_INTERVAL);
   }
 
@@ -1262,14 +1673,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
         state.arbiterContextPercent = arbiterPercent;
         state.orchestratorContextPercent = orchestratorPercent;
-        drawStatus();
+        drawContext();
       },
 
       onToolUse: (tool: string, count: number) => {
         state.currentTool = tool;
         state.toolCallCount = count;
         state.lastToolTime = Date.now();
-        drawStatus();
+        drawContext();
         drawChat();  // Also redraw chat for tool indicator
       },
 
@@ -1295,7 +1706,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         // Turn on bubbles (stays on until work is done)
         state.sceneState.bubbleVisible = true;
         drawTiles(true);
-        drawStatus();
+        drawChat(true);
       },
 
       onWaitingStop: () => {
@@ -1305,7 +1716,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         // Turn off bubbles
         state.sceneState.bubbleVisible = false;
         drawTiles(true);
-        drawStatus();
+        drawChat(true);
       },
 
       onOrchestratorSpawn: (orchestratorNumber: number) => {
@@ -1320,7 +1731,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.orchestratorContextPercent = null;
         state.currentTool = null;
         state.toolCallCount = 0;
-        drawStatus();
+        drawContext();
       },
 
       onDebugLog: (entry: DebugLogEntry) => {
@@ -1493,10 +1904,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Turn on bubbles
     state.sceneState.bubbleVisible = true;
     drawTiles(true);
-    drawStatus();
 
     // Auto-scroll to show the working indicator
-    const layout = getLayout();
+    const layout = getLayout(state.inputBuffer);
     const totalLines =
       state.messages.reduce((acc, msg) => {
         return acc + getMessageLineCount(msg, layout.chatArea.width);
@@ -1511,7 +1921,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     clearAllHops();
     state.sceneState.bubbleVisible = false;
     drawTiles(true);
-    drawStatus();
     drawChat(true); // Clear the working indicator
   }
 
