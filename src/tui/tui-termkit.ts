@@ -130,6 +130,7 @@ const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
 
 // Input area
 const MAX_INPUT_LINES = 5; // Maximum visible lines in input area
+const SCROLL_PADDING = 10; // Extra rows to scroll past content
 
 // Colors
 const COLORS = {
@@ -422,6 +423,61 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
+   * Build the rendered chat lines array - single source of truth for chat content.
+   * Includes messages with spacing, working indicator, and tool indicator.
+   * Always reserves space for indicators to prevent layout jumping.
+   */
+  function getRenderedChatLines(chatWidth: number): { text: string; color: string }[] {
+    const renderedLines: { text: string; color: string }[] = [];
+
+    // Messages with spacing between them
+    for (let i = 0; i < state.messages.length; i++) {
+      const msg = state.messages[i];
+      const prefix = getMessagePrefix(msg);
+      const color = getMessageColor(msg.speaker);
+      const wrappedLines = wrapText(prefix + msg.text, chatWidth);
+      for (const line of wrappedLines) {
+        renderedLines.push({ text: line, color });
+      }
+      // Add blank line between messages (but not after the last one)
+      if (i < state.messages.length - 1) {
+        renderedLines.push({ text: '', color: COLORS.reset });
+      }
+    }
+
+    // Always reserve space for working indicator (2 lines: blank + indicator)
+    // This prevents layout jumping when waiting state changes
+    if (renderedLines.length > 0) {
+      renderedLines.push({ text: '', color: COLORS.reset });
+    }
+    if (state.waitingFor !== 'none') {
+      const showIndicator = state.blinkCycle % 2 === 0;
+      if (showIndicator) {
+        const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
+        const dots = '.'.repeat((state.blinkCycle % 3) + 1);
+        const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
+        renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
+      } else {
+        renderedLines.push({ text: '', color: COLORS.reset });
+      }
+    } else {
+      renderedLines.push({ text: '', color: COLORS.reset });
+    }
+
+    // Always reserve space for tool indicator (2 lines: blank + tool)
+    renderedLines.push({ text: '', color: COLORS.reset });
+    if (state.currentTool && Date.now() - state.lastToolTime < 5000) {
+      const pulse = state.animationFrame < 4 ? '⸬' : ' ';
+      const toolText = `${pulse} ${state.currentTool} ${pulse}`;
+      renderedLines.push({ text: toolText, color: `\x1b[2m\x1b[35m` });
+    } else {
+      renderedLines.push({ text: '', color: COLORS.reset });
+    }
+
+    return renderedLines;
+  }
+
+  /**
    * Draw chat area - only redraws if messages or scroll changed
    */
   function drawChat(force: boolean = false) {
@@ -446,58 +502,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const layout = getLayout(state.inputBuffer);
     const visibleLines = layout.chatArea.height;
 
+    // Get rendered lines from single source of truth
+    const renderedLines = getRenderedChatLines(layout.chatArea.width);
+
     // Calculate max scroll
-    const totalLines = state.messages.reduce((acc, msg) => {
-      return acc + getMessageLineCount(msg, layout.chatArea.width);
-    }, 0);
-    const maxScroll = Math.max(0, totalLines - visibleLines);
+    const maxScroll = Math.max(0, renderedLines.length - visibleLines + SCROLL_PADDING);
     state.scrollOffset = Math.min(Math.max(0, state.scrollOffset), maxScroll);
-
-    // Render messages to line array (with 1-line padding between messages)
-    const renderedLines: { text: string; color: string }[] = [];
-    for (let i = 0; i < state.messages.length; i++) {
-      const msg = state.messages[i];
-      const prefix = getMessagePrefix(msg);
-      const color = getMessageColor(msg.speaker);
-      const wrappedLines = wrapText(prefix + msg.text, layout.chatArea.width);
-      for (const line of wrappedLines) {
-        renderedLines.push({ text: line, color });
-      }
-      // Add blank line between messages (but not after the last one)
-      if (i < state.messages.length - 1) {
-        renderedLines.push({ text: '', color: COLORS.reset });
-      }
-    }
-
-    // Add working indicator when waiting for a response
-    if (state.waitingFor !== 'none') {
-      // Add blank line before indicator if there are messages
-      if (renderedLines.length > 0) {
-        renderedLines.push({ text: '', color: COLORS.reset });
-      }
-      // Blinking effect: show/hide based on blink cycle (~2 seconds on/off)
-      const showIndicator = state.blinkCycle % 2 === 0;
-      if (showIndicator) {
-        const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
-        const dots = '.'.repeat((state.blinkCycle % 3) + 1);
-        const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
-        renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
-      } else {
-        // Keep the space but don't show text (smooth blinking)
-        renderedLines.push({ text: '', color: COLORS.reset });
-      }
-    }
-
-    // Transient tool indicator with pulse animation
-    if (state.currentTool && Date.now() - state.lastToolTime < 5000) {
-      if (renderedLines.length > 0) {
-        renderedLines.push({ text: '', color: COLORS.reset });
-      }
-      // Pulse effect: alternate visibility based on animation frame
-      const pulse = state.animationFrame < 4 ? '⸬' : ' ';
-      const toolText = `${pulse} ${state.currentTool} ${pulse}`;
-      renderedLines.push({ text: toolText, color: `\x1b[2m\x1b[35m` }); // dim + magenta
-    }
 
     // Draw visible lines
     const chatX = layout.chatArea.x;
@@ -864,12 +874,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }
   }
 
-  function getMessageLineCount(msg: Message, width: number): number {
-    const prefix = getMessagePrefix(msg);
-    const wrapped = wrapText(prefix + msg.text, width);
-    return wrapped.length;
-  }
-
   function wrapText(text: string, width: number): string[] {
     const lines: string[] = [];
 
@@ -918,12 +922,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       timestamp: new Date(),
     });
 
-    // Auto-scroll to bottom
+    // Auto-scroll to bottom using single source of truth
     const layout = getLayout(state.inputBuffer);
-    const totalLines = state.messages.reduce((acc, msg) => {
-      return acc + getMessageLineCount(msg, layout.chatArea.width);
-    }, 0);
-    state.scrollOffset = Math.max(0, totalLines - layout.chatArea.height);
+    const renderedLines = getRenderedChatLines(layout.chatArea.width);
+    state.scrollOffset = Math.max(0, renderedLines.length - layout.chatArea.height);
 
     drawChat();
   }
@@ -1199,12 +1201,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         break;
 
       case 'G':
-        // Scroll to bottom
-        const layout = getLayout(state.inputBuffer);
-        const totalLines = state.messages.reduce((acc, msg) => {
-          return acc + getMessageLineCount(msg, layout.chatArea.width);
-        }, 0);
-        state.scrollOffset = Math.max(0, totalLines - layout.chatArea.height);
+        // Scroll to bottom using single source of truth
+        const layoutG = getLayout(state.inputBuffer);
+        const renderedLinesG = getRenderedChatLines(layoutG.chatArea.width);
+        state.scrollOffset = Math.max(0, renderedLinesG.length - layoutG.chatArea.height);
         drawChat();
         break;
 
@@ -1905,13 +1905,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     state.sceneState.bubbleVisible = true;
     drawTiles(true);
 
-    // Auto-scroll to show the working indicator
+    // Auto-scroll to show the working indicator using single source of truth
     const layout = getLayout(state.inputBuffer);
-    const totalLines =
-      state.messages.reduce((acc, msg) => {
-        return acc + getMessageLineCount(msg, layout.chatArea.width);
-      }, 0) + 2; // +2 for blank line and indicator
-    state.scrollOffset = Math.max(0, totalLines - layout.chatArea.height);
+    const renderedLines = getRenderedChatLines(layout.chatArea.width);
+    state.scrollOffset = Math.max(0, renderedLines.length - layout.chatArea.height);
     drawChat(true);
   }
 
