@@ -625,10 +625,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (state.mode === 'INSERT') {
       statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      statusLine += '\x1b[38;2;140;140;140m    esc:normal  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
     } else {
-      statusLine += '\x1b[48;2;130;44;19m\x1b[97m NORMAL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[48;2;130;44;19m\x1b[97m SCROLL \x1b[0m'; // Brown bg (130,44,19), bright white text
+      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
     }
 
     term.moveTo(statusX, statusY);
@@ -1187,6 +1187,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'i':
       case 'ENTER':
         state.mode = 'INSERT';
+        // Auto-scroll to bottom when entering insert mode
+        const layoutIns = getLayout(state.inputBuffer);
+        const renderedLinesIns = getRenderedChatLines(layoutIns.chatArea.width);
+        state.scrollOffset = Math.max(0, renderedLinesIns.length - layoutIns.chatArea.height);
+        drawChat();
         drawStatus(true);
         drawInput(true);
         break;

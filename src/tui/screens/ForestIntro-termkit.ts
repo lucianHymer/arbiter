@@ -970,10 +970,10 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         let newX = state.playerX;
         let newY = state.playerY;
 
-        if (key === 'UP') newY--;
-        if (key === 'DOWN') newY++;
-        if (key === 'LEFT') newX--;
-        if (key === 'RIGHT') newX++;
+        if (key === 'UP' || key === 'k') newY--;
+        if (key === 'DOWN' || key === 'j') newY++;
+        if (key === 'LEFT' || key === 'h') newX--;
+        if (key === 'RIGHT' || key === 'l') newX++;
 
         // No movement key pressed
         if (newX === state.playerX && newY === state.playerY) {
