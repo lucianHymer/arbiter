@@ -55,7 +55,14 @@ export const TILE = {
   DEMON_4: 223,
   DEMON_5: 224,
   FOCUS: 270, // Focus overlay - corner brackets to highlight active speaker
+  CHAT_BUBBLE_QUARTERS: 267, // Quarter tiles - top-right is chat bubble indicator
 } as const;
+
+// ============================================================================
+// Quarter Tile Types
+// ============================================================================
+
+export type QuarterPosition = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 
 // ============================================================================
 // Types
@@ -162,6 +169,101 @@ export function compositeWithFocus(charPixels: RGB[][], focusPixels: RGB[][], al
  */
 export function mirrorTile(pixels: RGB[][]): RGB[][] {
   return pixels.map(row => [...row].reverse());
+}
+
+/**
+ * Extract an 8x8 quarter from a 16x16 tile
+ * @param pixels The full 16x16 tile pixels
+ * @param quarter Which quarter to extract
+ * @returns 8x8 pixel array
+ */
+export function extractQuarterTile(pixels: RGB[][], quarter: QuarterPosition): RGB[][] {
+  const halfSize = TILE_SIZE / 2; // 8
+  let startX = 0;
+  let startY = 0;
+
+  switch (quarter) {
+    case 'top-left':
+      startX = 0;
+      startY = 0;
+      break;
+    case 'top-right':
+      startX = halfSize;
+      startY = 0;
+      break;
+    case 'bottom-left':
+      startX = 0;
+      startY = halfSize;
+      break;
+    case 'bottom-right':
+      startX = halfSize;
+      startY = halfSize;
+      break;
+  }
+
+  const result: RGB[][] = [];
+  for (let y = 0; y < halfSize; y++) {
+    const row: RGB[] = [];
+    for (let x = 0; x < halfSize; x++) {
+      row.push(pixels[startY + y][startX + x]);
+    }
+    result.push(row);
+  }
+
+  return result;
+}
+
+/**
+ * Composite an 8x8 quarter tile onto a specific corner of a 16x16 tile
+ * @param base The full 16x16 tile pixels (will be cloned, not mutated)
+ * @param quarter The 8x8 quarter tile to overlay
+ * @param position Where to place the quarter tile
+ * @param alphaThreshold Pixels with alpha below this use the base pixel
+ * @returns New 16x16 pixel array with quarter composited
+ */
+export function compositeQuarterTile(
+  base: RGB[][],
+  quarter: RGB[][],
+  position: QuarterPosition,
+  alphaThreshold: number = 1
+): RGB[][] {
+  const halfSize = TILE_SIZE / 2; // 8
+  let startX = 0;
+  let startY = 0;
+
+  switch (position) {
+    case 'top-left':
+      startX = 0;
+      startY = 0;
+      break;
+    case 'top-right':
+      startX = halfSize;
+      startY = 0;
+      break;
+    case 'bottom-left':
+      startX = 0;
+      startY = halfSize;
+      break;
+    case 'bottom-right':
+      startX = halfSize;
+      startY = halfSize;
+      break;
+  }
+
+  // Clone the base tile
+  const result: RGB[][] = base.map(row => row.map(px => ({ ...px })));
+
+  // Overlay the quarter
+  for (let y = 0; y < halfSize; y++) {
+    for (let x = 0; x < halfSize; x++) {
+      const quarterPx = quarter[y][x];
+      if (quarterPx.a >= alphaThreshold) {
+        result[startY + y][startX + x] = quarterPx;
+      }
+    }
+  }
+
+  return result;
 }
 
 /**

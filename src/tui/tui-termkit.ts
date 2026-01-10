@@ -87,6 +87,7 @@ interface TUIState {
   animationFrame: number;
   blinkCycle: number; // Slower counter for chat blink (increments every animation cycle)
   waitingFor: WaitingState;
+  chatBubbleStartTime: number; // Timestamp when chat bubble was shown (for 5s timeout)
 
   // Exit confirmation state
   pendingExit: boolean;
@@ -278,6 +279,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     animationFrame: 0,
     blinkCycle: 0,
     waitingFor: 'none',
+    chatBubbleStartTime: 0,
     pendingExit: false,
     crashCount: 0,
   };
@@ -395,11 +397,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Create scene from state
     const scene = createScene(state.sceneState);
 
-    // Render scene to ANSI string (activeHops from sceneState)
+    // Render scene to ANSI string (activeHops from sceneState, plus chat bubble)
     const sceneStr = renderScene(
       state.tileset,
       scene,
-      state.sceneState.activeHops
+      state.sceneState.activeHops,
+      state.sceneState
     );
 
     // Split by lines and write each line
@@ -931,12 +934,26 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       timestamp: new Date(),
     });
 
+    // Set chat bubble for the speaker (clears any previous bubble)
+    if (speaker === 'human') {
+      state.sceneState.chatBubbleTarget = 'human';
+      state.chatBubbleStartTime = Date.now();
+    } else if (speaker === 'arbiter') {
+      state.sceneState.chatBubbleTarget = 'arbiter';
+      state.chatBubbleStartTime = Date.now();
+    } else if (speaker === 'orchestrator') {
+      state.sceneState.chatBubbleTarget = 'conjuring';
+      state.chatBubbleStartTime = Date.now();
+    }
+    // system messages don't show a chat bubble
+
     // Auto-scroll to bottom using single source of truth
     const layout = getLayout(state.inputBuffer);
     const renderedLines = getRenderedChatLines(layout.chatArea.width);
     state.scrollOffset = Math.max(0, renderedLines.length - layout.chatArea.height);
 
     drawChat();
+    drawTiles(true); // Force redraw tiles for chat bubble
   }
 
   // ============================================================================
@@ -1448,6 +1465,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       if (state.currentTool && Date.now() - state.lastToolTime > 5000) {
         state.currentTool = null;
         state.toolCallCount = 0;
+      }
+
+      // Auto-clear chat bubble after 5 seconds
+      if (state.sceneState.chatBubbleTarget && Date.now() - state.chatBubbleStartTime > 5000) {
+        state.sceneState.chatBubbleTarget = null;
+        drawTiles(true); // Force redraw to remove bubble
       }
 
       // Tick hop animations and redraw if any are active

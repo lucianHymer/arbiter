@@ -17,6 +17,9 @@ import {
   compositeTiles,
   renderTile,
   mirrorTile,
+  extractQuarterTile,
+  compositeQuarterTile,
+  QuarterPosition,
 } from './tileset.js';
 
 // ============================================================================
@@ -46,6 +49,9 @@ export interface SceneState {
   activeHops: Map<string, HopState>; // key = "row,col"
   bubbleVisible: boolean; // Cauldron smoke on/off
   showSpellbook: boolean; // Arbiter's spellbook visibility
+
+  // Chat bubble indicator - shows over the most recent speaker
+  chatBubbleTarget: 'human' | 'arbiter' | 'conjuring' | null;
 }
 
 /**
@@ -143,6 +149,9 @@ export function createInitialSceneState(): SceneState {
     activeHops: new Map(),
     bubbleVisible: false,
     showSpellbook: false,
+
+    // Chat bubble
+    chatBubbleTarget: null,
   };
 }
 
@@ -257,19 +266,70 @@ export function createScene(state: SceneState): TileSpec[][] {
 // ============================================================================
 
 /**
+ * Get the row,col position for a chat bubble target
+ */
+function getChatBubblePosition(
+  state: SceneState,
+  target: 'human' | 'arbiter' | 'conjuring'
+): { row: number; col: number } {
+  switch (target) {
+    case 'human':
+      return { row: 2, col: state.humanCol };
+    case 'arbiter': {
+      const pos = state.arbiterPos;
+      switch (pos) {
+        case 0: return { row: 2, col: 2 };
+        case 1: return { row: 2, col: 3 };
+        case 2: return { row: 2, col: 4 };
+        case 3: return { row: 3, col: 4 };
+        default: return { row: 2, col: 3 };
+      }
+    }
+    case 'conjuring':
+      // First demon position
+      return { row: 2, col: 6 };
+  }
+}
+
+// Cache for the chat bubble quarter tile (extracted once, reused)
+let chatBubbleQuarterCache: RGB[][] | null = null;
+
+/**
+ * Get or create the cached chat bubble quarter tile
+ */
+function getChatBubbleQuarter(tileset: Tileset): RGB[][] {
+  if (!chatBubbleQuarterCache) {
+    const quartersTile = extractTile(tileset, TILE.CHAT_BUBBLE_QUARTERS);
+    chatBubbleQuarterCache = extractQuarterTile(quartersTile, 'top-right');
+  }
+  return chatBubbleQuarterCache;
+}
+
+/**
  * Render the scene to an ANSI string
  *
  * @param tileset - The loaded tileset
  * @param scene - The tile grid from createScene
  * @param activeHops - Map of "row,col" -> HopState for positions that should hop
+ * @param sceneState - Optional scene state for chat bubble rendering
  */
 export function renderScene(
   tileset: Tileset,
   scene: TileSpec[][],
-  activeHops: Map<string, HopState> = new Map()
+  activeHops: Map<string, HopState> = new Map(),
+  sceneState?: SceneState
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
+
+  // Determine chat bubble position if target is set
+  let bubbleRow = -1;
+  let bubbleCol = -1;
+  if (sceneState?.chatBubbleTarget) {
+    const pos = getChatBubblePosition(sceneState, sceneState.chatBubbleTarget);
+    bubbleRow = pos.row;
+    bubbleCol = pos.col;
+  }
 
   const renderedTiles: string[][][] = [];
 
@@ -287,7 +347,31 @@ export function renderScene(
         mirrored = tileSpec.mirrored;
       }
 
-      renderedRow.push(getTileRender(tileset, grassPixels, tileIndex, mirrored));
+      // Check if this position needs the chat bubble
+      const needsBubble = row === bubbleRow && col === bubbleCol;
+
+      if (needsBubble) {
+        // Render without cache, adding the chat bubble overlay
+        let pixels = extractTile(tileset, tileIndex);
+
+        // Composite on grass if needed
+        if (tileIndex >= 80) {
+          pixels = compositeTiles(pixels, grassPixels, 1);
+        }
+
+        if (mirrored) {
+          pixels = mirrorTile(pixels);
+        }
+
+        // Add chat bubble to top-right corner
+        const bubbleQuarter = getChatBubbleQuarter(tileset);
+        pixels = compositeQuarterTile(pixels, bubbleQuarter, 'top-right', 1);
+
+        renderedRow.push(renderTile(pixels));
+      } else {
+        // Use cached render
+        renderedRow.push(getTileRender(tileset, grassPixels, tileIndex, mirrored));
+      }
     }
     renderedTiles.push(renderedRow);
   }
