@@ -625,10 +625,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (state.mode === 'INSERT') {
       statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      statusLine += '\x1b[2m    esc:normal  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[38;2;140;140;140m    esc:normal  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
     } else {
       statusLine += '\x1b[48;2;130;44;19m\x1b[97m NORMAL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      statusLine += '\x1b[2m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  j/k:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
     }
 
     term.moveTo(statusX, statusY);
@@ -1192,12 +1192,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         break;
 
       case 'j':
+      case 'DOWN':
         // Scroll down
         state.scrollOffset++;
         drawChat();
         break;
 
       case 'k':
+      case 'UP':
         // Scroll up
         state.scrollOffset = Math.max(0, state.scrollOffset - 1);
         drawChat();
