@@ -9,10 +9,13 @@ Quick reference for Claude to load relevant knowledge.
 @architecture/router-design.md
 @architecture/logging-architecture.md
 @architecture/context-calculation.md
+@architecture/structured-output-routing.md
 
 ## TUI
 
 @tui/tile-renderer.md
+@tui/working-indicator.md
+@tui/input-handling.md
 
 ## Gotchas
 
