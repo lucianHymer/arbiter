@@ -18,6 +18,7 @@ System design and component relationships.
 Terminal user interface implementation details.
 
 - [Tile-based Renderer](tui/tile-renderer.md) - 16x16 fantasy tileset, ANSI true color, half-block technique, compositing rules, animation system, scene state
+- [Chat Bubble Indicator](tui/chat-bubble-indicator.md) - Quarter-tile extraction/compositing, 5-second auto-clear, speaker-based positioning
 - [Working Indicator Pattern](tui/working-indicator.md) - Transient tool indicator implementation, animation system, auto-clear strategies, implementation options
 - [Input Handling](tui/input-handling.md) - Two-mode (INSERT/NORMAL) vim-like input system, state management, submission flow
 

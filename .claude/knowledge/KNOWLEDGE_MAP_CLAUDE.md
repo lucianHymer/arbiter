@@ -14,6 +14,7 @@ Quick reference for Claude to load relevant knowledge.
 ## TUI
 
 @tui/tile-renderer.md
+@tui/chat-bubble-indicator.md
 @tui/working-indicator.md
 @tui/input-handling.md
 

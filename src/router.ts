@@ -9,7 +9,6 @@ import type {
   SDKResultMessage,
   Options,
 } from "@anthropic-ai/claude-agent-sdk";
-
 import { z } from "zod";
 import { saveSession, PersistedSession } from './session-persistence.js';
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -147,25 +146,19 @@ const CONTEXT_POLL_INTERVAL_MS = 60_000;
 /**
  * Poll context usage by forking a session and running /context
  * Uses forkSession: true to avoid polluting the main conversation
+ * Note: This does clutter resume history - no workaround found yet
  *
  * @param sessionId - The session ID to fork and check
- * @param sessionOptions - The session's original options (system prompt, tools, etc.)
  * @returns Context percentage (0-100) or null if polling failed
  */
-async function pollContextForSession(
-  sessionId: string,
-  sessionOptions: Partial<Options>
-): Promise<number | null> {
+async function pollContextForSession(sessionId: string): Promise<number | null> {
   try {
     const q = query({
       prompt: '/context',
       options: {
-        ...sessionOptions,
         resume: sessionId,
         forkSession: true,  // Fork to avoid polluting main session
         permissionMode: 'bypassPermissions',
-        // Don't pass abortController - we want this to complete
-        abortController: undefined,
       } as Options,
     });
 
@@ -188,7 +181,6 @@ async function pollContextForSession(
     return percent;
   } catch (error) {
     // Silently fail - context polling is best-effort
-    console.error('Context poll failed:', error);
     return null;
   }
 }
@@ -443,14 +435,9 @@ export class Router {
    * Forks sessions and runs /context to get accurate values
    */
   private async pollAllContexts(): Promise<void> {
-    // Poll Arbiter context with its options
+    // Poll Arbiter context
     if (this.state.arbiterSessionId) {
-      const arbiterOptions: Partial<Options> = {
-        systemPrompt: ARBITER_SYSTEM_PROMPT,
-        mcpServers: this.arbiterMcpServer ? { "arbiter-tools": this.arbiterMcpServer } : undefined,
-        allowedTools: [...ARBITER_ALLOWED_TOOLS],
-      };
-      const arbiterPercent = await pollContextForSession(this.state.arbiterSessionId, arbiterOptions);
+      const arbiterPercent = await pollContextForSession(this.state.arbiterSessionId);
       if (arbiterPercent !== null) {
         updateArbiterContext(this.state, arbiterPercent);
         this.callbacks.onDebugLog?.({
@@ -461,18 +448,10 @@ export class Router {
       }
     }
 
-    // Poll Orchestrator context if active with its options
+    // Poll Orchestrator context if active
     let orchPercent: number | null = null;
     if (this.currentOrchestratorSession?.sessionId) {
-      const orchOptions: Partial<Options> = {
-        systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-        allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
-        outputFormat: {
-          type: 'json_schema',
-          schema: orchestratorOutputJsonSchema,
-        },
-      };
-      orchPercent = await pollContextForSession(this.currentOrchestratorSession.sessionId, orchOptions);
+      orchPercent = await pollContextForSession(this.currentOrchestratorSession.sessionId);
       if (orchPercent !== null) {
         updateOrchestratorContext(this.state, orchPercent);
         this.callbacks.onDebugLog?.({
