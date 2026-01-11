@@ -1,6 +1,6 @@
 # Knowledge Map
 
-*Last updated: 2026-01-10*
+*Last updated: 2026-01-11*
 
 ## Architecture
 
@@ -12,6 +12,7 @@ System design and component relationships.
 - [Logging Architecture](architecture/logging-architecture.md) - Message flow, debug logging, context tracking, tool use events
 - [Context Calculation](architecture/context-calculation.md) - Session fork polling approach for 100% accurate context tracking
 - [Structured Output Routing](architecture/structured-output-routing.md) - Deterministic orchestrator message routing via SDK structured outputs
+- [Requirements Selection Flow](architecture/requirements-selection-flow.md) - TUI overlay for requirements file selection, onRequirementsReady callback, entrance sequence timing
 
 ## TUI
 
@@ -20,7 +21,14 @@ Terminal user interface implementation details.
 - [Tile-based Renderer](tui/tile-renderer.md) - 16x16 fantasy tileset, ANSI true color, half-block technique, compositing rules, animation system, scene state
 - [Chat Bubble Indicator](tui/chat-bubble-indicator.md) - Quarter-tile extraction/compositing, 5-second auto-clear, speaker-based positioning
 - [Working Indicator Pattern](tui/working-indicator.md) - Transient tool indicator implementation, animation system, auto-clear strategies, implementation options
-- [Input Handling](tui/input-handling.md) - Two-mode (INSERT/NORMAL) vim-like input system, state management, submission flow
+- [Input Handling](tui/input-handling.md) - Two-mode (INSERT/NORMAL) vim-like input system, state management, submission flow, terminal signal handling (Ctrl-C/Z/\), dtach support
+- [Message Panel](tui/message-panel.md) - Reusable renderMessagePanel function for RPG-style tile-bordered dialogs
+
+## Workflows
+
+How to do things in this project.
+
+- [Sound Integration](workflows/sound-integration.md) - WAV sound assets, implementation pattern following tileset.ts, integration points in TUI screens
 
 ## Gotchas
 
@@ -30,3 +38,5 @@ Non-obvious behaviors and known issues.
 - [Ink ANSI Clearing](gotchas/ink-ansi-clearing.md) - Ink clears raw ANSI writes on re-render, requires interval-based repainting workaround
 - [ForestIntro Exit Mechanism](gotchas/forestintro-exit-mechanism.md) - Player must walk OFF screen (x >= SCENE_WIDTH_TILES) to exit, not just reach rightmost tile
 - [ForestIntro Dialogue Positioning](gotchas/forestintro-dialogue-positioning.md) - Dialogue box Y position must account for scene offset and tile height calculations
+- [TypeScript as Casts](gotchas/typescript-as-casts.md) - Avoid `as` casts and `any` types which bypass type checking and hide bugs
+- [Requirements Overlay Clearing](gotchas/requirements-overlay-clearing.md) - Use term.clear() for overlay clearing, not manual ANSI coordinate filling

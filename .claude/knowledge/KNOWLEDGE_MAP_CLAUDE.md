@@ -10,6 +10,7 @@ Quick reference for Claude to load relevant knowledge.
 @architecture/logging-architecture.md
 @architecture/context-calculation.md
 @architecture/structured-output-routing.md
+@architecture/requirements-selection-flow.md
 
 ## TUI
 
@@ -17,6 +18,11 @@ Quick reference for Claude to load relevant knowledge.
 @tui/chat-bubble-indicator.md
 @tui/working-indicator.md
 @tui/input-handling.md
+@tui/message-panel.md
+
+## Workflows
+
+@workflows/sound-integration.md
 
 ## Gotchas
 
@@ -24,3 +30,5 @@ Quick reference for Claude to load relevant knowledge.
 @gotchas/ink-ansi-clearing.md
 @gotchas/forestintro-exit-mechanism.md
 @gotchas/forestintro-dialogue-positioning.md
+@gotchas/typescript-as-casts.md
+@gotchas/requirements-overlay-clearing.md

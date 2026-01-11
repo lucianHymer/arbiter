@@ -44,6 +44,70 @@ The `drawInput()` function (~lines 568-595):
 - Shows cursor at end of buffer (INSERT mode only)
 - No explicit cursor position tracking needed
 
+## Terminal Signal Handling
+
+In raw mode, the OS doesn't generate signals from control characters - they arrive as bytes. Must handle them manually and send signals with `process.kill()`.
+
+### Control Key Handling (Main TUI)
+
+| Key | Event | Action |
+|-----|-------|--------|
+| Ctrl-C | `CTRL_C` key event | Shows exit confirmation prompt |
+| Ctrl-Z | `CTRL_Z` key event | Suspends process via `process.kill(process.pid, 'SIGTSTP')` |
+| Ctrl-\ | Raw stdin byte `0x1c` | Passes through for dtach via `process.kill(process.pid, 'SIGQUIT')` |
+
+### Ctrl-Z Suspend Implementation
+
+```typescript
+// Exit raw mode
+process.stdin.setRawMode(false);
+// Remove any listeners that might interfere
+process.removeAllListeners('SIGTSTP');
+// Send signal to process group
+process.kill(0, 'SIGTSTP');
+```
+
+### SIGCONT Resume Handler
+
+```typescript
+process.on('SIGCONT', () => {
+  // Toggle raw mode off/on to reset termios (OS resets terminal attrs on suspend)
+  process.stdin.setRawMode(false);
+  process.stdin.setRawMode(true);
+  // Re-init terminal-kit
+  term.grabInput(true);
+  term.fullscreen(true);
+  // Redraw
+  fullDraw();
+});
+```
+
+### Ctrl-\ for dtach
+
+terminal-kit doesn't emit `CTRL_BACKSLASH` as a key event. Must use raw stdin data handler:
+
+```typescript
+process.stdin.on('data', (data) => {
+  if (data.includes(0x1c)) {
+    process.kill(process.pid, 'SIGQUIT');
+  }
+});
+```
+
+### dtach Reattach
+
+Use `dtach -r winch` flag to force SIGWINCH on reattach. SIGWINCH handler toggles raw mode and calls `fullDraw()`.
+
+### Intro Screens
+
+TitleScreen, CharacterSelect, ForestIntro, and GitignoreCheck screens:
+- Exit on Ctrl-C/Z
+- Pass through Ctrl-\ for dtach
+
 ## Related Files
 
 - src/tui/tui-termkit.ts
+- src/tui/screens/TitleScreen-termkit.ts
+- src/tui/screens/CharacterSelect-termkit.ts
+- src/tui/screens/ForestIntro-termkit.ts
+- src/tui/screens/GitignoreCheck-termkit.ts
