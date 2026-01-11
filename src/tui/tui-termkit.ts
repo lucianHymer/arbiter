@@ -1996,6 +1996,48 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawChat();
         break;
 
+      case 'b':
+      case 'CTRL_B': {
+        // Page up (back)
+        const layoutB = getLayout(state.inputBuffer);
+        state.scrollOffset = Math.max(0, state.scrollOffset - layoutB.chatArea.height);
+        drawChat();
+        break;
+      }
+
+      case 'f':
+      case 'CTRL_F': {
+        // Page down (forward)
+        const layoutF = getLayout(state.inputBuffer);
+        const renderedLinesF = getRenderedChatLines(layoutF.chatArea.width);
+        const maxScrollF = Math.max(0, renderedLinesF.length - layoutF.chatArea.height);
+        state.scrollOffset = Math.min(maxScrollF, state.scrollOffset + layoutF.chatArea.height);
+        drawChat();
+        break;
+      }
+
+      case 'u':
+      case 'CTRL_U': {
+        // Half page up
+        const layoutU = getLayout(state.inputBuffer);
+        const halfPageU = Math.floor(layoutU.chatArea.height / 2);
+        state.scrollOffset = Math.max(0, state.scrollOffset - halfPageU);
+        drawChat();
+        break;
+      }
+
+      case 'd':
+      case 'CTRL_D': {
+        // Half page down
+        const layoutD = getLayout(state.inputBuffer);
+        const renderedLinesD = getRenderedChatLines(layoutD.chatArea.width);
+        const maxScrollD = Math.max(0, renderedLinesD.length - layoutD.chatArea.height);
+        const halfPageD = Math.floor(layoutD.chatArea.height / 2);
+        state.scrollOffset = Math.min(maxScrollD, state.scrollOffset + halfPageD);
+        drawChat();
+        break;
+      }
+
       case 'o':
         // Open debug log with less
         openLogViewer();
