@@ -56,6 +56,7 @@ export const TILE = {
   DEMON_5: 224,
   FOCUS: 270, // Focus overlay - corner brackets to highlight active speaker
   CHAT_BUBBLE_QUARTERS: 267, // Quarter tiles - top-right is chat bubble indicator
+  SCROLL: 124,
 } as const;
 
 // ============================================================================

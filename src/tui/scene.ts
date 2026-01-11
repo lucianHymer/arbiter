@@ -52,6 +52,9 @@ export interface SceneState {
 
   // Chat bubble indicator - shows over the most recent speaker
   chatBubbleTarget: 'human' | 'arbiter' | 'conjuring' | null;
+
+  // Scroll of requirements visibility
+  scrollVisible: boolean;
 }
 
 /**
@@ -152,6 +155,9 @@ export function createInitialSceneState(): SceneState {
 
     // Chat bubble
     chatBubbleTarget: null,
+
+    // Scroll of requirements
+    scrollVisible: false,
   };
 }
 
@@ -172,7 +178,7 @@ export function createInitialSceneState(): SceneState {
  * - Spellbook appears to the left of arbiter when at position 2
  */
 export function createScene(state: SceneState): TileSpec[][] {
-  const { arbiterPos, demonCount, selectedCharacter, humanCol, bubbleVisible, showSpellbook } = state;
+  const { arbiterPos, demonCount, selectedCharacter, humanCol, bubbleVisible, showSpellbook, scrollVisible } = state;
   // arbiterPos -1 means off-screen (not visible)
   const arbiterVisible = arbiterPos >= 0;
 
@@ -185,7 +191,7 @@ export function createScene(state: SceneState): TileSpec[][] {
   let arbiterRow = 2;
   if (arbiterVisible) {
     switch (arbiterPos) {
-      case 0: arbiterCol = 2; arbiterRow = 2; break;
+      case 0: arbiterCol = 3; arbiterRow = 2; break;
       case 1: arbiterCol = 3; arbiterRow = 2; break;
       case 2: arbiterCol = 4; arbiterRow = 2; break;
       case 3: arbiterCol = 4; arbiterRow = 3; break;
@@ -217,6 +223,11 @@ export function createScene(state: SceneState): TileSpec[][] {
       // Human character on row 2 at humanCol position
       if (row === 2 && col === humanCol && humanCol >= 0 && humanCol < SCENE_WIDTH) {
         tile = selectedCharacter;
+      }
+
+      // Scroll of requirements (row 2, col 2) - between human and arbiter
+      if (scrollVisible && row === 2 && col === 2) {
+        tile = TILE.SCROLL;
       }
 
       // Spellbook at row 4, col 4 (one down and left from campfire)
@@ -278,7 +289,7 @@ function getChatBubblePosition(
     case 'arbiter': {
       const pos = state.arbiterPos;
       switch (pos) {
-        case 0: return { row: 2, col: 2 };
+        case 0: return { row: 2, col: 3 };  // Fixed to match createScene
         case 1: return { row: 2, col: 3 };
         case 2: return { row: 2, col: 4 };
         case 3: return { row: 3, col: 4 };

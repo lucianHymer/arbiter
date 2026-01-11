@@ -32,6 +32,7 @@ export interface AppState {
   currentOrchestrator: OrchestratorState | null;
   conversationLog: Message[];
   crashCount: number;
+  requirementsPath: string | null;
 }
 
 /**
@@ -45,6 +46,7 @@ export function createInitialState(): AppState {
     currentOrchestrator: null,
     conversationLog: [],
     crashCount: 0,
+    requirementsPath: null,
   };
 }
 

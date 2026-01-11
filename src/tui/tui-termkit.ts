@@ -8,6 +8,7 @@
 import termKit from 'terminal-kit';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Fzf } from 'fzf';
 import {
   Tileset,
   TILE,
@@ -18,6 +19,7 @@ import {
   extractTile,
   compositeTiles,
   renderTile,
+  RGB,
 } from './tileset.js';
 import {
   SceneState,
@@ -52,6 +54,8 @@ export interface TUI {
   onInput(callback: (text: string) => void): void;
   /** Registers a callback for when user confirms exit */
   onExit(callback: () => void): void;
+  /** Registers a callback for when requirements selection is complete */
+  onRequirementsReady(callback: () => void): void;
   /** Start the loading animation for arbiter or orchestrator */
   startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void;
   /** Stop the loading animation */
@@ -100,6 +104,15 @@ interface TUIState {
 
   // Crash tracking
   crashCount: number;
+
+  // Requirements overlay state
+  requirementsOverlay: 'none' | 'prompt' | 'picker' | 'rat-transform';
+  requirementsFiles: string[];
+  requirementsFilteredFiles: string[];
+  requirementsSearchQuery: string;
+  requirementsSelectedIndex: number;
+  requirementsCursorPos: number;
+  requirementsTilesDrawn: boolean;  // Flag to avoid redrawing tiles on every keystroke
 }
 
 /**
@@ -153,6 +166,14 @@ const COLORS = {
   reset: '\x1b[0m',
   dim: '\x1b[2m',
   bold: '\x1b[1m',
+};
+
+// Dialogue box tile indices (for message panels)
+const DIALOGUE_TILES = {
+  TOP_LEFT: 38,
+  TOP_RIGHT: 39,
+  BOTTOM_LEFT: 48,
+  BOTTOM_RIGHT: 49,
 };
 
 // Terminal-Kit instance
@@ -273,6 +294,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       ...createInitialSceneState(),
       selectedCharacter: selectedCharacter ?? TILE.HUMAN_1,
       humanCol: 0, // Start at leftmost position for entry animation
+      scrollVisible: !!appState.requirementsPath,
     },
     messages: [],
     scrollOffset: 0,
@@ -293,6 +315,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     chatBubbleStartTime: 0,
     pendingExit: false,
     crashCount: 0,
+    // Requirements overlay state - always start as 'none', overlay triggered after entrance
+    requirementsOverlay: 'none',
+    requirementsFiles: [],
+    requirementsFilteredFiles: [],
+    requirementsSearchQuery: '',
+    requirementsSelectedIndex: 0,
+    requirementsCursorPos: 0,
+    requirementsTilesDrawn: false,
   };
 
   // Tracking for minimal redraws
@@ -315,12 +345,17 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   // Callbacks
   let inputCallback: ((text: string) => void) | null = null;
   let exitCallback: (() => void) | null = null;
+  let requirementsReadyCallback: (() => void) | null = null;
   let animationInterval: NodeJS.Timeout | null = null;
   let isRunning = false;
   let inLogViewer = false; // Track when log viewer is open
+  let inRequirementsOverlay = false; // Track when requirements overlay is open
   let entranceComplete = false; // Track if entrance animation is done
   let pendingArbiterMessage: string | null = null; // Message waiting for entrance to complete
   let arbiterWalkInterval: NodeJS.Timeout | null = null; // For walk animations
+
+  // Track if we need to show requirements prompt after entrance
+  const needsRequirementsPrompt = !appState.requirementsPath;
 
   // Summon sequence state machine
   // States: 'idle' (at human) → 'walking' (to cauldron) → 'ready' (can show demons) → 'dismissing' (walking back)
@@ -384,8 +419,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (!force && state.animationFrame === tracker.lastTileFrame) return;
     tracker.lastTileFrame = state.animationFrame;
 
-    // Skip drawing if log viewer is open (but state still updates)
-    if (inLogViewer) return;
+    // Skip drawing if log viewer or requirements overlay is open (but state still updates)
+    if (inLogViewer || state.requirementsOverlay !== 'none') return;
 
     if (!state.tileset) return;
     const layout = getLayout(state.inputBuffer);
@@ -500,8 +535,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw chat area - only redraws if messages or scroll changed
    */
   function drawChat(force: boolean = false) {
-    // Skip drawing if log viewer is open
-    if (inLogViewer) return;
+    // Skip drawing if log viewer or requirements overlay is open
+    if (inLogViewer || state.requirementsOverlay !== 'none') return;
 
     const scrollChanged = state.scrollOffset !== tracker.lastScrollOffset;
     const messagesChanged = state.messages.length !== tracker.lastMessageCount;
@@ -557,8 +592,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw context bar - shows Arbiter %, Conjuring %, and tool info
    */
   function drawContext(force: boolean = false) {
-    // Skip drawing if log viewer is open
-    if (inLogViewer) return;
+    // Skip drawing if log viewer or requirements overlay is open
+    if (inLogViewer || state.requirementsOverlay !== 'none') return;
 
     const contextChanged =
       state.arbiterContextPercent !== tracker.lastContextPercent ||
@@ -607,8 +642,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Shows mode indicator and keyboard hints only (context info is on separate line above)
    */
   function drawStatus(force: boolean = false) {
-    // Skip drawing if log viewer is open
-    if (inLogViewer) return;
+    // Skip drawing if log viewer or requirements overlay is open
+    if (inLogViewer || state.requirementsOverlay !== 'none') return;
 
     const modeChanged = state.mode !== tracker.lastMode;
 
@@ -861,16 +896,713 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastInputHeight = 1;
 
     term.clear();
-    drawTiles(true);
-    drawChat(true);
-    drawContext(true);
-    drawStatus(true);
-    drawInput(true);
+
+    // Draw requirements overlay if active, otherwise normal UI
+    if (state.requirementsOverlay !== 'none') {
+      drawRequirementsOverlay();
+    } else {
+      drawTiles(true);
+      drawChat(true);
+      drawContext(true);
+      drawStatus(true);
+      drawInput(true);
+    }
+  }
+
+  // ============================================================================
+  // Requirements Overlay Functions
+  // ============================================================================
+
+  /**
+   * Draw the requirements overlay based on current state
+   */
+  function drawRequirementsOverlay(): void {
+    if (!state.tileset) return;
+
+    // Draw the scene (left side) only if not already drawn - avoids flicker on keystroke
+    if (!state.requirementsTilesDrawn) {
+      drawTilesInternal();
+      state.requirementsTilesDrawn = true;
+    }
+
+    let panelLines: string[] = [];
+    let panelWidth = 6; // tiles
+
+    switch (state.requirementsOverlay) {
+      case 'prompt':
+        panelLines = renderMessagePanel(state.tileset, [
+          '\x1b[97mDo you bring a Scroll of Requirements?\x1b[0m',
+          '\x1b[90m(a detailed markdown file describing your task)\x1b[0m',
+          '',
+          '\x1b[90mThe Arbiter rewards those who come prepared.\x1b[0m',
+          '\x1b[90mScrolls contain context, specs, and acceptance criteria.\x1b[0m',
+          '',
+          '\x1b[92m[Y]\x1b[0m Yes, I have a .md file    \x1b[91m[N]\x1b[0m No, I\'ll wing it',
+        ], panelWidth);
+        break;
+
+      case 'picker':
+        // Build file list display with cursor at correct position
+        const beforeCursor = state.requirementsSearchQuery.slice(0, state.requirementsCursorPos);
+        const afterCursor = state.requirementsSearchQuery.slice(state.requirementsCursorPos);
+        const inputLineWithCursor = `\x1b[90m> ${beforeCursor}\x1b[97m_\x1b[90m${afterCursor}\x1b[0m`;
+
+        const displayLines: string[] = [
+          '\x1b[97mSelect your Scroll of Requirements:\x1b[0m',
+          '\x1b[90m(markdown files in your project)\x1b[0m',
+          '',
+          inputLineWithCursor,
+          '',
+        ];
+
+        // Show filtered files (max 16 for 3-tile tall panel)
+        const files = state.requirementsFilteredFiles.length > 0
+          ? state.requirementsFilteredFiles
+          : state.requirementsFiles;
+        const maxVisible = 16;
+        const startIdx = Math.max(0, state.requirementsSelectedIndex - Math.floor(maxVisible / 2));
+        const visibleFiles = files.slice(startIdx, startIdx + maxVisible);
+
+        visibleFiles.forEach((file, i) => {
+          const actualIdx = startIdx + i;
+          const isSelected = actualIdx === state.requirementsSelectedIndex;
+          const prefix = isSelected ? '\x1b[93m> ' : '  ';
+          const suffix = isSelected ? '\x1b[0m' : '';
+          displayLines.push(`${prefix}${file}${suffix}`);
+        });
+
+        if (files.length === 0) {
+          displayLines.push('\x1b[90m(no .md files found - the scroll rack is empty)\x1b[0m');
+        }
+
+        displayLines.push('');
+        displayLines.push('\x1b[90mArrow keys navigate  Enter select  Esc to flee\x1b[0m');
+
+        panelWidth = 7;
+        panelLines = renderMessagePanel(state.tileset, displayLines, panelWidth, 3);
+        break;
+
+      case 'rat-transform':
+        panelLines = renderMessagePanel(state.tileset, [
+          '\x1b[91mYou have been transformed into a rat.\x1b[0m',
+          '\x1b[90m(the Arbiter does not suffer the unprepared)\x1b[0m',
+          '',
+          '\x1b[90mCome back with a requirements.md or similar.\x1b[0m',
+          '',
+          '\x1b[90mPress any key to scurry away...\x1b[0m',
+        ], 5);
+        break;
+
+      default:
+        return;
+    }
+
+    // Position the panel within the SCENE area only (not whole screen)
+    // Scene dimensions: 7 tiles x 6 tiles = 112 chars x 48 rows
+    const sceneWidthChars = 7 * 16;  // 112
+    const sceneHeightChars = 6 * 8;  // 48
+
+    const panelWidthChars = panelWidth * 16;
+    const panelHeight = panelLines.length;
+
+    // Center panel within scene area
+    const panelX = Math.max(1, Math.floor((sceneWidthChars - panelWidthChars) / 2));
+
+    // For rat-transform, position at bottom of scene, shifted one tile right; for others, center vertically in scene
+    let panelY: number;
+    let finalPanelX = panelX;
+    if (state.requirementsOverlay === 'rat-transform') {
+      panelY = sceneHeightChars - panelHeight + 4;  // Lower position so arbiter at row 3 is visible
+      finalPanelX = panelX + 16;  // One tile to the right
+    } else {
+      panelY = Math.max(1, Math.floor((sceneHeightChars - panelHeight) / 2));
+    }
+
+    // Draw panel
+    for (let i = 0; i < panelLines.length; i++) {
+      term.moveTo(finalPanelX, panelY + i);
+      process.stdout.write(panelLines[i] + RESET);
+    }
+  }
+
+  /**
+   * Redraw just the picker input line (for cursor movement)
+   * Falls back to full panel redraw for simplicity, but structured for future optimization
+   */
+  function drawPickerInput(): void {
+    // For now, redraw the full panel (but not the tiles)
+    drawRequirementsOverlay();
+  }
+
+  /**
+   * Redraw the picker file list only
+   * Falls back to full panel redraw for simplicity, but structured for future optimization
+   */
+  function drawPickerList(): void {
+    // For now, redraw the full panel (but not the tiles)
+    drawRequirementsOverlay();
+  }
+
+  /**
+   * Redraw picker content (input + list) without full panel redraw
+   * Falls back to full panel redraw for simplicity, but structured for future optimization
+   */
+  function drawPickerContent(): void {
+    // For now, redraw the full panel (but not the tiles)
+    drawRequirementsOverlay();
+  }
+
+  /**
+   * Internal tile drawing (used by overlay to draw scene behind)
+   * This is a simplified version that doesn't check overlay state
+   */
+  function drawTilesInternal(): void {
+    if (!state.tileset) return;
+    const layout = getLayout(state.inputBuffer);
+
+    // Draw filler rows above the scene
+    const rowsAbove = layout.tileArea.fillerRowsAbove;
+    if (rowsAbove > 0) {
+      const fillerTileRowsAbove = Math.ceil(rowsAbove / CHAR_HEIGHT);
+      for (let tileRow = 0; tileRow < fillerTileRowsAbove; tileRow++) {
+        const fillerLines = getFillerRow(state.tileset, tileRow);
+        for (let charRow = CHAR_HEIGHT - 1; charRow >= 0; charRow--) {
+          const screenY = layout.tileArea.y - 1 - (tileRow * CHAR_HEIGHT) - (CHAR_HEIGHT - 1 - charRow);
+          if (screenY >= 1) {
+            term.moveTo(layout.tileArea.x, screenY);
+            process.stdout.write(fillerLines[charRow] + RESET);
+          }
+        }
+      }
+    }
+
+    // Create scene from state
+    const scene = createScene(state.sceneState);
+
+    // Render scene to ANSI string
+    const sceneStr = renderScene(
+      state.tileset,
+      scene,
+      state.sceneState.activeHops,
+      state.sceneState
+    );
+
+    // Split by lines and write each line
+    const lines = sceneStr.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      term.moveTo(layout.tileArea.x, layout.tileArea.y + i);
+      process.stdout.write(lines[i] + RESET);
+    }
+
+    // Draw filler rows below the scene
+    const rowsBelow = layout.tileArea.fillerRowsBelow;
+    if (rowsBelow > 0) {
+      const fillerTileRowsBelow = Math.ceil(rowsBelow / CHAR_HEIGHT);
+      for (let tileRow = 0; tileRow < fillerTileRowsBelow; tileRow++) {
+        const fillerLines = getFillerRow(state.tileset, tileRow + 100);
+        for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + (tileRow * CHAR_HEIGHT) + charRow;
+          if (screenY <= layout.height) {
+            term.moveTo(layout.tileArea.x, screenY);
+            process.stdout.write(fillerLines[charRow] + RESET);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Key handler for requirements overlay
+   */
+  function requirementsKeyHandler(key: string): void {
+    switch (state.requirementsOverlay) {
+      case 'prompt':
+        if (key === 'y' || key === 'Y') {
+          // Switch to file picker
+          loadFilesForPicker();
+          state.requirementsOverlay = 'picker';
+          inRequirementsOverlay = true;
+          drawRequirementsOverlay();
+        } else if (key === 'n' || key === 'N') {
+          // Rat transformation
+          playSfx('magic');
+          // First show smoke
+          state.sceneState.selectedCharacter = TILE.SMOKE; // 90
+          state.requirementsTilesDrawn = false;  // Reset so tiles get redrawn with smoke
+          drawTilesInternal();
+          state.requirementsTilesDrawn = true;  // Mark as drawn
+
+          // After 1500ms (3x longer smoke animation), show rat
+          setTimeout(() => {
+            state.sceneState.selectedCharacter = 210; // Rat tile
+            state.requirementsOverlay = 'rat-transform';
+            state.requirementsTilesDrawn = false;  // Reset so tiles get redrawn with rat
+            drawRequirementsOverlay();
+          }, 1500);
+        }
+        break;
+
+      case 'picker':
+        if (key === 'UP') {
+          state.requirementsSelectedIndex = Math.max(0, state.requirementsSelectedIndex - 1);
+          drawPickerList();
+        } else if (key === 'DOWN') {
+          const files = state.requirementsFilteredFiles.length > 0
+            ? state.requirementsFilteredFiles
+            : state.requirementsFiles;
+          state.requirementsSelectedIndex = Math.min(files.length - 1, state.requirementsSelectedIndex + 1);
+          drawPickerList();
+        } else if (key === 'LEFT') {
+          // Move cursor left in search query
+          state.requirementsCursorPos = Math.max(0, state.requirementsCursorPos - 1);
+          drawPickerInput();
+        } else if (key === 'RIGHT') {
+          // Move cursor right in search query
+          state.requirementsCursorPos = Math.min(state.requirementsSearchQuery.length, state.requirementsCursorPos + 1);
+          drawPickerInput();
+        } else if (key === 'ENTER') {
+          // Select file
+          const files = state.requirementsFilteredFiles.length > 0
+            ? state.requirementsFilteredFiles
+            : state.requirementsFiles;
+          if (files.length > 0) {
+            const selectedFile = files[state.requirementsSelectedIndex];
+            selectRequirementsFile(selectedFile);
+          }
+        } else if (key === 'ESCAPE') {
+          // Cancel - go back to prompt
+          state.requirementsOverlay = 'prompt';
+          state.requirementsSearchQuery = '';
+          state.requirementsSelectedIndex = 0;
+          state.requirementsCursorPos = 0;
+          state.requirementsTilesDrawn = false;  // Force scene redraw to clear larger picker
+          drawRequirementsOverlay();
+        } else if (key === 'BACKSPACE') {
+          // Delete char before cursor
+          if (state.requirementsCursorPos > 0) {
+            state.requirementsSearchQuery =
+              state.requirementsSearchQuery.slice(0, state.requirementsCursorPos - 1) +
+              state.requirementsSearchQuery.slice(state.requirementsCursorPos);
+            state.requirementsCursorPos--;
+            filterFiles();
+            drawPickerContent();
+          }
+        } else if (key.length === 1 && key.match(/[a-zA-Z0-9._\-\/]/)) {
+          // Insert char at cursor position
+          state.requirementsSearchQuery =
+            state.requirementsSearchQuery.slice(0, state.requirementsCursorPos) +
+            key +
+            state.requirementsSearchQuery.slice(state.requirementsCursorPos);
+          state.requirementsCursorPos++;
+          filterFiles();
+          drawPickerContent();
+        }
+        break;
+
+      case 'rat-transform':
+        // Any key exits
+        process.exit(0);
+        break;
+    }
+  }
+
+  /**
+   * Load files for the picker using recursive directory walk
+   */
+  function loadFilesForPicker(): void {
+    const files: string[] = [];
+
+    function walkDir(dir: string, prefix: string = ''): void {
+      try {
+        const entries = fs.readdirSync(dir);
+        for (const entry of entries) {
+          if (entry.startsWith('.') || entry === 'node_modules') continue;
+          const fullPath = path.join(dir, entry);
+          const relativePath = prefix ? `${prefix}/${entry}` : entry;
+          try {
+            const stat = fs.statSync(fullPath);
+            if (stat.isDirectory()) {
+              walkDir(fullPath, relativePath);
+            } else if (entry.endsWith('.md')) {
+              files.push(relativePath);
+            }
+          } catch {
+            // Skip files we can't stat
+          }
+        }
+      } catch {
+        // Skip directories we can't read
+      }
+    }
+
+    walkDir(process.cwd());
+    state.requirementsFiles = files;
+    state.requirementsFilteredFiles = files;
+  }
+
+  /**
+   * Filter files using fzf algorithm
+   */
+  function filterFiles(): void {
+    if (!state.requirementsSearchQuery) {
+      state.requirementsFilteredFiles = state.requirementsFiles;
+      state.requirementsSelectedIndex = 0;
+      return;
+    }
+
+    const fzf = new Fzf(state.requirementsFiles);
+    const results = fzf.find(state.requirementsSearchQuery);
+    state.requirementsFilteredFiles = results.map((r: { item: string }) => r.item);
+    state.requirementsSelectedIndex = 0;
+  }
+
+  /**
+   * Select a requirements file and close overlay
+   */
+  function selectRequirementsFile(filePath: string): void {
+    appState.requirementsPath = filePath;
+    state.sceneState.scrollVisible = true;
+    state.requirementsOverlay = 'none';
+    state.requirementsTilesDrawn = false;  // Reset for next time overlay is shown
+    inRequirementsOverlay = false;
+    fullDraw();
+
+    // Signal that requirements are ready (router can start now)
+    if (requirementsReadyCallback) {
+      requirementsReadyCallback();
+      requirementsReadyCallback = null;
+    }
+
+    // NOW trigger arbiter walk (was waiting for requirements selection)
+    startArbiterWalk();
   }
 
   // ============================================================================
   // Helper Functions
   // ============================================================================
+
+  /**
+   * Strip ANSI escape codes from a string to get visible length
+   */
+  function stripAnsi(str: string): string {
+    // eslint-disable-next-line no-control-regex
+    return str.replace(/\x1b\[[0-9;]*m/g, '');
+  }
+
+  /**
+   * Create middle fill row for dialogue box (samples from left tile's middle column)
+   */
+  function createMiddleFill(leftTile: RGB[][], charRow: number): string {
+    const pixelRowTop = charRow * 2;
+    const pixelRowBot = pixelRowTop + 1;
+    const sampleX = 8; // Middle column
+
+    let result = '';
+    for (let x = 0; x < 16; x++) {
+      const topPixel = leftTile[pixelRowTop][sampleX];
+      const botPixel = leftTile[pixelRowBot]?.[sampleX] || topPixel;
+      result += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
+      result += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
+      result += '\u2584';
+    }
+    result += RESET;
+    return result;
+  }
+
+  /**
+   * Wrap text with consistent background color
+   */
+  function wrapTextWithBg(text: string, bgColor: string): string {
+    const bgMaintained = text.replace(/\x1b\[0m/g, `\x1b[0m${bgColor}`);
+    return bgColor + bgMaintained + RESET;
+  }
+
+  /**
+   * Create middle row border segments for panels taller than 2 tiles.
+   *
+   * For panels with heightTiles > 2, we need "middle" tile rows that only have
+   * left and right vertical borders (no top/bottom horizontal borders). This function
+   * generates the ANSI strings for those vertical borders by sampling from the
+   * BOTTOM HALF of the top corner tiles (38, 39), which contain just the vertical
+   * border lines without the horizontal top border.
+   *
+   * The pattern from the bottom half of the tiles is repeated for all 8 character
+   * rows of each middle tile row using modulo 4 (since bottom half = 4 char rows).
+   *
+   * @param tileset - The loaded tileset containing dialogue corner tiles
+   * @param charRow - Which character row within the tile (0-7)
+   * @returns Object containing:
+   *   - left: 16-char wide left border segment (ANSI string)
+   *   - fill: 16-char wide interior fill segment (solid background color)
+   *   - right: 16-char wide right border segment (ANSI string)
+   *
+   * @internal Used by renderMessagePanel() for heightTiles > 2
+   */
+  function createMiddleRowBorders(tileset: Tileset, charRow: number): { left: string; fill: string; right: string } {
+    // Use the BOTTOM HALF of the top corner tiles for middle rows
+    // This gives us just the vertical border without horizontal border lines
+    const topLeftTile = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
+    const topRightTile = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
+
+    // For middle rows, we render from the bottom half of the top tiles
+    // Bottom half of tile is pixel rows 8-15 (4 char rows worth)
+    // Use modulo to repeat this pattern for all 8 char rows
+    const actualCharRow = charRow % 4;
+    const pixelRowTop = 8 + (actualCharRow * 2);  // Start from row 8 (bottom half)
+    const pixelRowBot = pixelRowTop + 1;
+
+    // Render left border (full 16 chars from bottom half of top-left tile)
+    let left = '';
+    for (let x = 0; x < 16; x++) {
+      const topPixel = topLeftTile[pixelRowTop][x];
+      const botPixel = topLeftTile[pixelRowBot]?.[x] || topPixel;
+      left += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
+      left += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
+      left += '\u2584';
+    }
+    left += RESET;
+
+    // Render right border (full 16 chars from bottom half of top-right tile)
+    let right = '';
+    for (let x = 0; x < 16; x++) {
+      const topPixel = topRightTile[pixelRowTop][x];
+      const botPixel = topRightTile[pixelRowBot]?.[x] || topPixel;
+      right += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
+      right += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
+      right += '\u2584';
+    }
+    right += RESET;
+
+    // For fill, sample the interior color from center of tile
+    const sampleX = 8;
+    const topPixel = topLeftTile[pixelRowTop][sampleX];
+    const botPixel = topLeftTile[pixelRowBot]?.[sampleX] || topPixel;
+    let fill = '';
+    for (let x = 0; x < 16; x++) {
+      fill += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
+      fill += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
+      fill += '\u2584';
+    }
+    fill += RESET;
+
+    return { left, fill, right };
+  }
+
+  /**
+   * Render a tile-bordered message panel with customizable dimensions.
+   *
+   * Creates a decorative RPG-style panel using dialogue box corner tiles from the
+   * Jerom Fantasy Tileset. The panel consists of:
+   * - Corner tiles (38=top-left, 39=top-right, 48=bottom-left, 49=bottom-right)
+   * - Horizontal fill segments between corners (sampled from corner tile interiors)
+   * - Vertical border segments for middle rows (panels taller than 2 tiles)
+   *
+   * Text is automatically centered both horizontally and vertically within the
+   * interior area. ANSI color codes in textLines are preserved and handled correctly.
+   * Long lines are truncated with "..." if they exceed the interior width.
+   *
+   * ## Panel Structure
+   *
+   * For a 5-wide x 3-tall panel:
+   * ```
+   * [TL][fill][fill][fill][TR]   <- Top row of tiles (8 char rows)
+   * [L ][    interior    ][R ]   <- Middle row(s) (8 char rows each)
+   * [BL][fill][fill][fill][BR]   <- Bottom row of tiles (8 char rows)
+   * ```
+   *
+   * ## Dimensions Reference
+   *
+   * - Each tile = 16 characters wide x 8 character rows tall
+   * - Interior width = (widthTiles - 2) * 16 characters
+   * - Total height = heightTiles * 8 character rows
+   * - Usable text area excludes ~2 rows at top and bottom for borders
+   *
+   * @param tileset - The loaded tileset containing dialogue tiles (38, 39, 48, 49)
+   * @param textLines - Array of text lines to display. Can include ANSI color codes.
+   *                    Lines exceeding interior width are truncated with "..."
+   * @param widthTiles - Panel width in tiles (default 5). Minimum 2 (corners only).
+   *                     Each tile adds 16 characters of width.
+   *                     - 4 tiles = 64 chars (48 interior)
+   *                     - 5 tiles = 80 chars (48 interior)
+   *                     - 6 tiles = 96 chars (64 interior)
+   * @param heightTiles - Panel height in tiles (default 2). Minimum 2 (top + bottom row).
+   *                      Each tile adds 8 character rows.
+   *                      - 2 tiles = 16 rows (~12 usable for text)
+   *                      - 3 tiles = 24 rows (~20 usable for text)
+   *                      - 4 tiles = 32 rows (~28 usable for text)
+   * @returns Array of ANSI strings, one per character row (length = heightTiles * 8)
+   *
+   * @example
+   * // Small 2-tile high prompt (16 char rows, fits ~3-4 lines of text)
+   * const panel = renderMessagePanel(tileset, ['Hello!', 'Press any key...'], 4, 2);
+   *
+   * @example
+   * // Taller 3-tile panel for file picker or multi-line content (24 char rows)
+   * const fileList = ['config.json', 'index.ts', 'package.json', 'README.md'];
+   * const panel = renderMessagePanel(tileset, fileList, 6, 3);
+   *
+   * @example
+   * // Wide panel for longer text lines
+   * const panel = renderMessagePanel(tileset, ['A much longer line of text here'], 7, 2);
+   *
+   * @example
+   * // Extra tall 4-tile panel for extensive content (32 char rows)
+   * const panel = renderMessagePanel(tileset, longContentArray, 5, 4);
+   *
+   * @example
+   * // Text with ANSI colors (colors are preserved)
+   * const coloredLines = [
+   *   '\x1b[33mWarning:\x1b[0m File not found',
+   *   '\x1b[32mSuccess:\x1b[0m Operation complete'
+   * ];
+   * const panel = renderMessagePanel(tileset, coloredLines, 5, 2);
+   */
+  function renderMessagePanel(tileset: Tileset, textLines: string[], widthTiles: number = 5, heightTiles: number = 2): string[] {
+    const topLeft = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
+    const topRight = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
+    const bottomLeft = extractTile(tileset, DIALOGUE_TILES.BOTTOM_LEFT);
+    const bottomRight = extractTile(tileset, DIALOGUE_TILES.BOTTOM_RIGHT);
+
+    const tlRendered = renderTile(topLeft);
+    const trRendered = renderTile(topRight);
+    const blRendered = renderTile(bottomLeft);
+    const brRendered = renderTile(bottomRight);
+
+    // Create middle fill rows for top and bottom tiles
+    const middleTopRendered: string[] = [];
+    const middleBottomRendered: string[] = [];
+    for (let row = 0; row < CHAR_HEIGHT; row++) {
+      middleTopRendered.push(createMiddleFill(topLeft, row));
+      middleBottomRendered.push(createMiddleFill(bottomLeft, row));
+    }
+
+    // Create middle row borders (for panels taller than 2 tiles)
+    const middleRowBorders: { left: string; fill: string; right: string }[] = [];
+    for (let row = 0; row < CHAR_HEIGHT; row++) {
+      middleRowBorders.push(createMiddleRowBorders(tileset, row));
+    }
+
+    const middleTiles = Math.max(0, widthTiles - 2);
+    const interiorWidth = middleTiles * 16;
+    const middleRows = Math.max(0, heightTiles - 2); // Number of middle tile rows
+
+    // Sample background color from tile center
+    const bgSamplePixel = topLeft[8][8];
+    const textBgColor = `\x1b[48;2;${bgSamplePixel.r};${bgSamplePixel.g};${bgSamplePixel.b}m`;
+
+    const boxLines: string[] = [];
+
+    // Top row of tiles
+    for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+      let line = tlRendered[charRow];
+      for (let m = 0; m < middleTiles; m++) {
+        line += middleTopRendered[charRow];
+      }
+      line += trRendered[charRow];
+      boxLines.push(line);
+    }
+
+    // Middle rows of tiles (for height > 2)
+    for (let middleRowIdx = 0; middleRowIdx < middleRows; middleRowIdx++) {
+      for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+        const borders = middleRowBorders[charRow];
+        let line = borders.left;
+        for (let m = 0; m < middleTiles; m++) {
+          line += borders.fill;
+        }
+        line += borders.right;
+        boxLines.push(line);
+      }
+    }
+
+    // Bottom row of tiles
+    for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
+      let line = blRendered[charRow];
+      for (let m = 0; m < middleTiles; m++) {
+        line += middleBottomRendered[charRow];
+      }
+      line += brRendered[charRow];
+      boxLines.push(line);
+    }
+
+    // Center text in the interior area only (excluding top and bottom tile rows for panels > 2 tiles)
+    const boxHeight = CHAR_HEIGHT * heightTiles;
+
+    // Calculate interior area where text can be placed
+    let interiorStartRow: number;
+    let interiorEndRow: number;
+
+    if (heightTiles <= 2) {
+      // For 2-tile panels: text can go in rows 4-11 (lower half of top tile, upper half of bottom tile)
+      interiorStartRow = 2;
+      interiorEndRow = boxHeight - 3;
+    } else {
+      // For 3+ tile panels: text can go in rows 2 through boxHeight-3
+      // This allows text in top tile (rows 2-7), middle tiles (all rows), and bottom tile (rows 0-5)
+      interiorStartRow = 2;  // Leave 2 rows for top border
+      interiorEndRow = boxHeight - 3;  // Leave 2 rows for bottom border
+    }
+
+    const interiorHeight = interiorEndRow - interiorStartRow + 1;
+    const textStartOffset = interiorStartRow + Math.floor((interiorHeight - textLines.length) / 2);
+
+    for (let i = 0; i < textLines.length; i++) {
+      const boxLineIndex = textStartOffset + i;
+      // Only write text to rows within the interior area
+      if (boxLineIndex >= interiorStartRow && boxLineIndex <= interiorEndRow && boxLineIndex < boxLines.length) {
+        let line = textLines[i];
+        let visibleLength = stripAnsi(line).length;
+
+        // Truncate text if it exceeds interior width
+        if (visibleLength > interiorWidth) {
+          // Simple truncation - remove characters from the end
+          // This handles ANSI codes by checking visible length
+          let truncated = '';
+          let truncatedVisible = 0;
+          const maxLen = interiorWidth - 3; // Leave room for "..."
+          for (let c = 0; c < line.length && truncatedVisible < maxLen; c++) {
+            truncated += line[c];
+            // Check if this added to visible length
+            const newVisibleLen = stripAnsi(truncated).length;
+            truncatedVisible = newVisibleLen;
+          }
+          line = truncated + '...';
+          visibleLength = stripAnsi(line).length;
+        }
+
+        const padding = Math.max(0, Math.floor((interiorWidth - visibleLength) / 2));
+        const rightPadding = Math.max(0, interiorWidth - padding - visibleLength);
+        const textContent = ' '.repeat(padding) + line + ' '.repeat(rightPadding);
+        const textWithBg = wrapTextWithBg(textContent, textBgColor);
+
+        // Determine which tile row we're in and the char row within that tile
+        const tileRowIdx = Math.floor(boxLineIndex / CHAR_HEIGHT);
+        const charRow = boxLineIndex % CHAR_HEIGHT;
+
+        // Get appropriate left/right borders based on tile row
+        let leftBorder: string;
+        let rightBorder: string;
+        if (tileRowIdx === 0) {
+          // Top tile row
+          leftBorder = tlRendered[charRow];
+          rightBorder = trRendered[charRow];
+        } else if (tileRowIdx === heightTiles - 1) {
+          // Bottom tile row
+          leftBorder = blRendered[charRow];
+          rightBorder = brRendered[charRow];
+        } else {
+          // Middle tile row
+          const borders = middleRowBorders[charRow];
+          leftBorder = borders.left;
+          rightBorder = borders.right;
+        }
+
+        boxLines[boxLineIndex] = leftBorder + textWithBg + rightBorder;
+      }
+    }
+
+    return boxLines;
+  }
 
   function getMessagePrefix(msg: Message): string {
     if (msg.speaker === 'human') {
@@ -1652,11 +2384,28 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
+   * Start the arbiter walk animation from fire to human position.
+   * Called either directly from entrance sequence (no requirements prompt)
+   * or after user selects a requirements file.
+   */
+  function startArbiterWalk() {
+    animateArbiterWalk(0, () => {
+      // Entrance complete - show any pending message
+      entranceComplete = true;
+      if (pendingArbiterMessage) {
+        addMessage('arbiter', pendingArbiterMessage);
+        pendingArbiterMessage = null;
+      }
+    });
+  }
+
+  /**
    * Run the full entrance sequence:
    * 1. Human walks in from left (col 0 → 1)
    * 2. Human hops twice (surprised)
    * 3. Arbiter hops twice (notices visitor)
-   * 4. Arbiter walks from fire to human (3 steps) - starts quickly after hop
+   * 4. Requirements prompt shows (if needed) - arbiter still at starting position
+   * 5. After user selects file (or if no prompt needed), arbiter walks to human
    */
   function runEntranceSequence() {
     // Show "the arbiter approaches" message
@@ -1666,9 +2415,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // 0ms: human at col 0
     // 400ms: human walks to col 1
     // 900ms: human hops twice (takes 1000ms, ends ~1900ms)
-    // 1800ms: arbiter hops twice (takes 1000ms) - waits for human to finish
-    // 2050ms: arbiter starts walking (quick start, 250ms after hop begins)
-    // 5050ms: entrance complete
+    // 1800ms: arbiter hops twice (takes 1000ms, ends ~2800ms)
+    // 2800ms: requirements prompt shows (if needed), OR arbiter starts walking
+    // After user selects file: arbiter walks
 
     // Step 1: Human walks in (already at col 0, moves to col 1)
     setTimeout(() => {
@@ -1690,18 +2439,26 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       triggerCharacterHop('arbiter', 2);
     }, 1800);
 
-    // Step 4: Arbiter walks from pos 3 to pos 0 (starts quickly after hop begins)
+    // Step 4: After hops complete (~2800ms), check if we need requirements prompt
     setTimeout(() => {
       if (!isRunning) return;
-      animateArbiterWalk(0, () => {
-        // Entrance complete - show any pending message
-        entranceComplete = true;
-        if (pendingArbiterMessage) {
-          addMessage('arbiter', pendingArbiterMessage);
-          pendingArbiterMessage = null;
+      if (needsRequirementsPrompt) {
+        // Show requirements overlay BEFORE arbiter walks
+        state.requirementsOverlay = 'prompt';
+        inRequirementsOverlay = true;  // Prevent animation interval from overwriting
+        loadFilesForPicker();  // Pre-load files
+        drawRequirementsOverlay();
+        // Arbiter will walk after user selects file (in selectRequirementsFile)
+      } else {
+        // No requirements prompt needed (CLI arg provided)
+        // Signal ready and start walk
+        if (requirementsReadyCallback) {
+          requirementsReadyCallback();
+          requirementsReadyCallback = null;
         }
-      });
-    }, 2050);
+        startArbiterWalk();
+      }
+    }, 2800);
   }
 
   // ============================================================================
@@ -1906,14 +2663,27 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Start animation timer
     startAnimation();
 
-    // Run the full entrance sequence immediately
+    // Always run the full entrance sequence
     // Human walks in, both characters hop, arbiter walks to human
+    // Requirements overlay shows AFTER entrance completes (if no CLI arg)
     runEntranceSequence();
 
     // Set up input handling
     term.grabInput(true);
 
     term.on('key', (key: string) => {
+      // Handle requirements overlay first (takes priority)
+      if (state.requirementsOverlay !== 'none') {
+        // Allow CTRL_C/CTRL_Z to exit even during overlay
+        if (key === 'CTRL_C' || key === 'CTRL_Z') {
+          state.pendingExit = true;
+          drawStatus(true);
+          return;
+        }
+        requirementsKeyHandler(key);
+        return;
+      }
+
       // Handle exit confirmation mode
       if (state.pendingExit) {
         if (key === 'y' || key === 'Y') {
@@ -1984,6 +2754,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     exitCallback = callback;
   }
 
+  function onRequirementsReady(callback: () => void): void {
+    requirementsReadyCallback = callback;
+  }
+
   function startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void {
     // Ignore during entrance sequence
     if (!entranceComplete) return;
@@ -2018,6 +2792,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     getRouterCallbacks,
     onInput,
     onExit,
+    onRequirementsReady,
     startWaiting,
     stopWaiting,
   };

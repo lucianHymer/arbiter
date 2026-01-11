@@ -96,6 +96,10 @@ async function main(): Promise<void> {
       }
     }
 
+    // Check for positional requirements file argument (first non-flag arg)
+    const positionalArgs = args.filter(arg => !arg.startsWith('--'));
+    const cliRequirementsFile = positionalArgs[0] || null;
+
     let selectedCharacter: number;
 
     if (savedSession) {
@@ -130,6 +134,9 @@ async function main(): Promise<void> {
     // Create initial application state
     state = createInitialState();
 
+    // Set requirements path if provided via CLI (interactive selection happens in TUI)
+    state.requirementsPath = cliRequirementsFile;
+
     // Create TUI with state reference and selected character
     tui = createTUI(state, selectedCharacter);
 
@@ -157,12 +164,16 @@ async function main(): Promise<void> {
     // Start TUI (takes over terminal)
     tui.start();
 
-    // Start router - either resume from saved session or start fresh
-    if (savedSession) {
-      await router.resumeFromSavedSession(savedSession);
-    } else {
-      await router.start();
-    }
+    // Wait for requirements selection to complete before starting router
+    tui.onRequirementsReady(async () => {
+      if (!router) return;
+      // Start router - either resume from saved session or start fresh
+      if (savedSession) {
+        await router.resumeFromSavedSession(savedSession);
+      } else {
+        await router.start();
+      }
+    });
 
     // Keep the process running
     // The TUI and router handle events asynchronously

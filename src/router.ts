@@ -772,9 +772,13 @@ export class Router {
 
     // Note: The Arbiter session runs continuously.
     // We'll send messages to it and process responses in a loop.
-    // Initial prompt to start the session - Arbiter awaits human input
+    // Create initial prompt - reference requirements file if provided
+    const initialPrompt = this.state.requirementsPath
+      ? `@${this.state.requirementsPath}\n\nStudy this Scroll of Requirements carefully. Acknowledge your understanding of what must be done, then await my command.`
+      : "Speak, mortal.";
+
     this.arbiterQuery = query({
-      prompt: "Speak, mortal.",
+      prompt: initialPrompt,
       options,
     });
 
