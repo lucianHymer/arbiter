@@ -116,6 +116,9 @@ interface TUIState {
   requirementsSelectedIndex: number;
   requirementsCursorPos: number;
   requirementsTilesDrawn: boolean;  // Flag to avoid redrawing tiles on every keystroke
+
+  // Drawing toggle - disabled during suspend/detach to prevent spazzy output
+  drawingEnabled: boolean;
 }
 
 /**
@@ -327,6 +330,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     requirementsSelectedIndex: 0,
     requirementsCursorPos: 0,
     requirementsTilesDrawn: false,
+    drawingEnabled: true,
   };
 
   // Tracking for minimal redraws
@@ -885,10 +889,25 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     return lines.length > 0 ? lines : [''];
   }
 
+  // Debounce tracking for fullDraw (prevents signal storm on dtach reattach)
+  let lastFullDrawTime = 0;
+  const FULL_DRAW_DEBOUNCE_MS = 50;
+
   /**
    * Full redraw of all components
    */
   function fullDraw() {
+    // Skip all drawing when disabled (suspended/detached)
+    if (!state.drawingEnabled) return;
+
+    // Skip drawing if no TTY (dtach detached)
+    if (!process.stdout.isTTY) return;
+
+    // Debounce rapid fullDraw calls (signal storm on dtach reattach)
+    const now = Date.now();
+    if (now - lastFullDrawTime < FULL_DRAW_DEBOUNCE_MS) return;
+    lastFullDrawTime = now;
+
     // Reset trackers to force redraw
     tracker.lastTileFrame = -1;
     tracker.lastScrollOffset = -1;
@@ -2265,6 +2284,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
   function startAnimation() {
     animationInterval = setInterval(() => {
+      // State updates always run (timers, counters) even when drawing disabled
       state.animationFrame = (state.animationFrame + 1) % 8;
       // Increment blink cycle every full animation cycle (for slower chat blink)
       if (state.animationFrame === 0) {
@@ -2278,12 +2298,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       }
 
       // Auto-clear chat bubble after 5 seconds
+      let bubbleCleared = false;
       if (state.sceneState.chatBubbleTarget && Date.now() - state.chatBubbleStartTime > 5000) {
         state.sceneState.chatBubbleTarget = null;
-        drawTiles(true); // Force redraw to remove bubble
+        bubbleCleared = true;
       }
 
-      // Tick hop animations and redraw if any are active
+      // Tick hop animations
       const hasHops = tickHops();
 
       // Animate bubbles when waiting (toggle every ~1 second based on animationFrame)
@@ -2292,7 +2313,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.sceneState.bubbleVisible = state.animationFrame < 4;
       }
 
-      if (hasHops || state.waitingFor !== 'none') {
+      // Skip actual drawing when disabled (suspended/detached) or no TTY
+      if (!state.drawingEnabled || !process.stdout.isTTY) return;
+
+      // Draw if animations are active or bubble just cleared
+      if (hasHops || state.waitingFor !== 'none' || bubbleCleared) {
         drawTiles();
         drawChat(); // Update chat working indicator
       }
@@ -2718,6 +2743,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       term.grabInput(true);
       term.fullscreen(true);
       term.hideCursor();
+      // Re-enable drawing and do a clean full redraw
+      state.drawingEnabled = true;
       fullDraw();
     });
 
@@ -2782,6 +2809,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Helper to properly suspend the process
     const suspendProcess = () => {
+      // Disable drawing first to prevent any in-flight draws
+      state.drawingEnabled = false;
       // Restore terminal to cooked mode
       if (process.stdin.isTTY && process.stdin.setRawMode) {
         process.stdin.setRawMode(false);
@@ -2793,8 +2822,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     };
 
     // Raw stdin handler for Ctrl-\ (0x1c) - terminal-kit doesn't emit this as a key
+    // This is used for dtach detachment
     process.stdin.on('data', (data: Buffer) => {
       if (data.includes(0x1c)) {  // Ctrl-\ = ASCII 28 = 0x1c
+        // Disable drawing before detach (same as suspend)
+        state.drawingEnabled = false;
         process.kill(process.pid, 'SIGQUIT');
       }
     });
