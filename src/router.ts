@@ -774,7 +774,25 @@ export class Router {
     // We'll send messages to it and process responses in a loop.
     // Create initial prompt - reference requirements file if provided
     const initialPrompt = this.state.requirementsPath
-      ? `@${this.state.requirementsPath}\n\nStudy this Scroll of Requirements carefully. Acknowledge your understanding of what must be done, then await my command.`
+      ? `@${this.state.requirementsPath}
+
+A Scroll of Requirements has been presented.
+
+Your task now is to achieve COMPLETE UNDERSTANDING before any work begins. This is the most critical phase. Follow your system prompt's Phase 1 protocol rigorously:
+
+1. **STUDY THE SCROLL** - Read every word. Understand the intent, not just the surface requirements.
+
+2. **INVESTIGATE THE CODEBASE** - Use your read tools extensively. Understand the current state, architecture, patterns, and constraints. See what exists. See what's missing.
+
+3. **IDENTIFY GAPS AND AMBIGUITIES** - What's unclear? What assumptions are being made? What edge cases aren't addressed? What could go wrong?
+
+4. **ASK CLARIFYING QUESTIONS** - Do not proceed with partial understanding. Ask everything you need to know. Resolve ALL ambiguity NOW, before any Orchestrator is summoned.
+
+5. **STATE BACK YOUR FULL UNDERSTANDING** - Once you've investigated and asked your questions, articulate back to me: What exactly will be built? What approach will be taken? What are the success criteria? What are the risks?
+
+Only when we have achieved 100% alignment on vision, scope, and approach - only when you could explain this task to an Orchestrator with complete confidence - only then do we proceed.
+
+Take your time. This phase determines everything that follows.`
       : "Speak, mortal.";
 
     this.arbiterQuery = query({
