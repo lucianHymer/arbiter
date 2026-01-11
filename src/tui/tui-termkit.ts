@@ -2143,10 +2143,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Map arbiterPos to actual row/col
       const pos = state.sceneState.arbiterPos;
       switch (pos) {
-        case 0: return { row: 2, col: 2 };
-        case 1: return { row: 2, col: 3 };
-        case 2: return { row: 2, col: 4 };
-        case 3: return { row: 3, col: 4 };
+        case 0: return { row: 2, col: 3 };  // By scroll (final position)
+        case 1: return { row: 2, col: 4 };  // By cauldron
+        case 2: return { row: 3, col: 4 };  // By fire (starting position)
         default: return { row: 2, col: 3 }; // fallback
       }
     } else {
@@ -2267,16 +2266,15 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
   /**
    * Animate the arbiter walking to a target position
-   * Old arbiter shuffles slowly - 1300ms per step
+   * Old arbiter shuffles slowly - 1 second per step
    *
    * Position mapping:
-   * - Pos 3: by fire (row 3, col 4) - starting position
-   * - Pos 2: by cauldron (row 2, col 4) - working position
-   * - Pos 1: center (row 2, col 3)
-   * - Pos 0: near human (row 2, col 2)
+   * - Pos 2: by fire (row 3, col 4) - starting position
+   * - Pos 1: by cauldron (row 2, col 4)
+   * - Pos 0: by scroll (row 2, col 3) - final position
    */
   function animateArbiterWalk(
-    targetPos: -1 | 0 | 1 | 2 | 3,
+    targetPos: -1 | 0 | 1 | 2,
     onComplete?: () => void
   ) {
     // Clear any existing walk animation
@@ -2297,8 +2295,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       const newPos = state.sceneState.arbiterPos + direction;
 
       // Type-safe position clamping
-      if (newPos >= -1 && newPos <= 3) {
-        state.sceneState.arbiterPos = newPos as -1 | 0 | 1 | 2 | 3;
+      if (newPos >= -1 && newPos <= 2) {
+        state.sceneState.arbiterPos = newPos as -1 | 0 | 1 | 2;
         playSfx('footstep');
         drawTiles(true); // Force redraw for walk animation
 
@@ -2328,7 +2326,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (summonState !== 'idle') return; // Already summoning or dismissing
 
     summonState = 'walking';
-    animateArbiterWalk(3, () => {  // Pos 3 = by fire (row 3, col 4)
+    animateArbiterWalk(2, () => {  // Pos 2 = by fire (row 3, col 4)
       // Walk complete - show spellbook after brief pause
       setTimeout(() => {
         state.sceneState.showSpellbook = true;

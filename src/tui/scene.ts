@@ -39,7 +39,7 @@ export interface HopState {
  * Scene state describing positions and counts of all scene elements
  */
 export interface SceneState {
-  arbiterPos: -1 | 0 | 1 | 2 | 3; // -1=off-screen, 0=near human, 1=center, 2=by cauldron, 3=by fire (start)
+  arbiterPos: -1 | 0 | 1 | 2; // -1=off-screen, 0=by scroll, 1=by cauldron, 2=by fire (start)
   demonCount: number; // 0-5
   focusTarget: 'human' | 'arbiter' | 'demon' | null;
   selectedCharacter: number; // Tile index 190-197 for selected human character
@@ -145,7 +145,7 @@ function getTileRender(
  */
 export function createInitialSceneState(): SceneState {
   return {
-    arbiterPos: 3, // Start by fire (row 3), walks to human when first message ready
+    arbiterPos: 2, // Start by fire (row 3), walks to scroll when first message ready
     demonCount: 0,
     focusTarget: null,
     selectedCharacter: TILE.HUMAN_1,
@@ -189,18 +189,16 @@ export function createScene(state: SceneState): TileSpec[][] {
   const arbiterVisible = arbiterPos >= 0;
 
   // Position mapping:
-  // Pos 3: row 3, col 4 (by fire - starting position)
-  // Pos 2: row 2, col 4 (moved up, by cauldron)
-  // Pos 1: row 2, col 3 (center)
-  // Pos 0: row 2, col 2 (near human)
+  // Pos 2: row 3, col 4 (by fire - starting position)
+  // Pos 1: row 2, col 4 (by cauldron)
+  // Pos 0: row 2, col 3 (by scroll - final position)
   let arbiterCol = -1;
   let arbiterRow = 2;
   if (arbiterVisible) {
     switch (arbiterPos) {
       case 0: arbiterCol = 3; arbiterRow = 2; break;
-      case 1: arbiterCol = 3; arbiterRow = 2; break;
-      case 2: arbiterCol = 4; arbiterRow = 2; break;
-      case 3: arbiterCol = 4; arbiterRow = 3; break;
+      case 1: arbiterCol = 4; arbiterRow = 2; break;
+      case 2: arbiterCol = 4; arbiterRow = 3; break;
     }
   }
 
@@ -295,10 +293,9 @@ function getChatBubblePosition(
     case 'arbiter': {
       const pos = state.arbiterPos;
       switch (pos) {
-        case 0: return { row: 2, col: 3 };  // Fixed to match createScene
-        case 1: return { row: 2, col: 3 };
-        case 2: return { row: 2, col: 4 };
-        case 3: return { row: 3, col: 4 };
+        case 0: return { row: 2, col: 3 };  // By scroll
+        case 1: return { row: 2, col: 4 };  // By cauldron
+        case 2: return { row: 3, col: 4 };  // By fire
         default: return { row: 2, col: 3 };
       }
     }
