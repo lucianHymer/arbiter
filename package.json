@@ -1,6 +1,6 @@
 {
   "name": "arbiter-ai",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Hierarchical AI orchestration system for extending Claude's effective context window while staying on task",
   "type": "module",
   "main": "dist/index.js",
