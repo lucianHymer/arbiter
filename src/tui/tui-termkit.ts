@@ -105,6 +105,9 @@ interface TUIState {
   // Crash tracking
   crashCount: number;
 
+  // Input lock until arbiter speaks
+  arbiterHasSpoken: boolean;
+
   // Requirements overlay state
   requirementsOverlay: 'none' | 'prompt' | 'picker' | 'rat-transform';
   requirementsFiles: string[];
@@ -315,6 +318,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     chatBubbleStartTime: 0,
     pendingExit: false,
     crashCount: 0,
+    arbiterHasSpoken: false,
     // Requirements overlay state - always start as 'none', overlay triggered after entrance
     requirementsOverlay: 'none',
     requirementsFiles: [],
@@ -1848,6 +1852,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           drawInput();
           break;
         }
+        // Block input until arbiter has spoken first
+        if (!state.arbiterHasSpoken) {
+          break;
+        }
         // Normal submit behavior
         if (state.inputBuffer.trim()) {
           const text = state.inputBuffer.trim();
@@ -2495,6 +2503,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         } else {
           addMessage('arbiter', text);
         }
+        // Unlock input now that arbiter has spoken
+        state.arbiterHasSpoken = true;
         // Hide tool indicator on message
         state.showToolIndicator = false;
         state.recentTools = [];
