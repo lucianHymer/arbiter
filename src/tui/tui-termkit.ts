@@ -677,10 +677,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (state.mode === 'INSERT') {
       statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      statusLine += '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
     } else {
       statusLine += '\x1b[48;2;130;44;19m\x1b[97m SCROLL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  <ctrl-c>:quit \x1b[0m';
+      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
     }
 
     term.moveTo(statusX, statusY);
@@ -2044,7 +2044,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       // Footer - green like INSERT mode
       term.moveTo(1, term.height);
-      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  <ctrl-c>:quit \x1b[0m');
+      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  ^C:quit  ^Z:suspend \x1b[0m');
     }
 
     drawLogViewer();
@@ -2060,7 +2060,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         return;
       }
 
-      if (key === 'CTRL_C' || key === 'CTRL_Z') {
+      if (key === 'CTRL_C') {
         // Close log viewer and show exit prompt
         term.off('key', logKeyHandler);
         inLogViewer = false;
@@ -2069,6 +2069,19 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawStatus(true);
         return;
       }
+
+      if (key === 'CTRL_Z') {
+        // Close log viewer and suspend
+        term.off('key', logKeyHandler);
+        inLogViewer = false;
+        if (process.stdin.isTTY && process.stdin.setRawMode) {
+          process.stdin.setRawMode(false);
+        }
+        process.removeAllListeners('SIGTSTP');
+        process.kill(0, 'SIGTSTP');
+        return;
+      }
+      // Note: CTRL_BACKSLASH is handled via raw stdin listener in start()
 
       const visibleLines = term.height - 2;
       const halfPage = Math.floor(visibleLines / 2);
@@ -2634,6 +2647,42 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       }
     });
 
+    // Handle SIGCONT (resume after suspend or dtach reattach) - restore TUI state
+    process.on('SIGCONT', () => {
+      // Toggle raw mode off/on to reset termios (workaround for OS resetting attrs)
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false);
+        process.stdin.setRawMode(true);
+      }
+      // Re-init terminal-kit and redraw
+      term.grabInput(true);
+      term.fullscreen(true);
+      term.hideCursor();
+      fullDraw();
+    });
+
+    // Handle SIGHUP (dtach reattach may send this)
+    process.on('SIGHUP', () => {
+      // Toggle raw mode and redraw - terminal might have reconnected
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false);
+        process.stdin.setRawMode(true);
+      }
+      term.grabInput(true);
+      fullDraw();
+    });
+
+    // Handle SIGWINCH (terminal resize, dtach sends this on reattach with REDRAW_WINCH)
+    process.on('SIGWINCH', () => {
+      // Toggle raw mode and redraw
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false);
+        process.stdin.setRawMode(true);
+      }
+      term.grabInput(true);
+      fullDraw();
+    });
+
     // Clear the debug log file for this session
     try {
       const dir = path.dirname(DEBUG_LOG_PATH);
@@ -2671,13 +2720,37 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Set up input handling
     term.grabInput(true);
 
+    // Helper to properly suspend the process
+    const suspendProcess = () => {
+      // Restore terminal to cooked mode
+      if (process.stdin.isTTY && process.stdin.setRawMode) {
+        process.stdin.setRawMode(false);
+      }
+      // Remove any SIGTSTP listeners so the default suspend behavior happens
+      process.removeAllListeners('SIGTSTP');
+      // Send SIGTSTP to process group (0) for proper job control
+      process.kill(0, 'SIGTSTP');
+    };
+
+    // Raw stdin handler for Ctrl-\ (0x1c) - terminal-kit doesn't emit this as a key
+    process.stdin.on('data', (data: Buffer) => {
+      if (data.includes(0x1c)) {  // Ctrl-\ = ASCII 28 = 0x1c
+        process.kill(process.pid, 'SIGQUIT');
+      }
+    });
+
     term.on('key', (key: string) => {
       // Handle requirements overlay first (takes priority)
       if (state.requirementsOverlay !== 'none') {
-        // Allow CTRL_C/CTRL_Z to exit even during overlay
-        if (key === 'CTRL_C' || key === 'CTRL_Z') {
+        // Allow CTRL_C to exit even during overlay
+        if (key === 'CTRL_C') {
           state.pendingExit = true;
           drawStatus(true);
+          return;
+        }
+        // Allow CTRL_Z to suspend during overlay
+        if (key === 'CTRL_Z') {
+          suspendProcess();
           return;
         }
         requirementsKeyHandler(key);
@@ -2702,12 +2775,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         return;
       }
 
-      if (key === 'CTRL_C' || key === 'CTRL_Z') {
+      if (key === 'CTRL_C') {
         // Show exit confirmation
         state.pendingExit = true;
         drawStatus(true);
         return;
       }
+
+      if (key === 'CTRL_Z') {
+        suspendProcess();
+        return;
+      }
+      // Note: CTRL_BACKSLASH (Ctrl-\) is handled via raw stdin listener above
       handleKeypress(key);
     });
 
