@@ -4,7 +4,7 @@
 
 import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
-import { createTUI, TUI, showTitleScreen, showCharacterSelect, showForestIntro } from './tui/index.js';
+import { createTUI, TUI, showTitleScreen, showCharacterSelect, showForestIntro, checkGitignore } from './tui/index.js';
 import { loadSession } from './session-persistence.js';
 
 /**
@@ -106,6 +106,9 @@ async function main(): Promise<void> {
 
       // Show title screen first (any key continues)
       await showTitleScreen();
+
+      // Check if Arbiter files should be added to .gitignore
+      await checkGitignore();
 
       // Show character selection screen
       let selectResult = await showCharacterSelect();

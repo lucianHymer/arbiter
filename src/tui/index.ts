@@ -18,6 +18,9 @@ export { showForestIntro } from './screens/ForestIntro-termkit.js';
 // Re-export the terminal-kit based CharacterSelect
 export { showCharacterSelect, type CharacterSelectResult } from './screens/CharacterSelect-termkit.js';
 
+// Re-export the terminal-kit based GitignoreCheck
+export { checkGitignore } from './screens/GitignoreCheck-termkit.js';
+
 // Re-export types for consumers
 export type { RouterCallbacks, DebugLogEntry } from '../router.js';
 export type { WaitingState } from './types.js';
