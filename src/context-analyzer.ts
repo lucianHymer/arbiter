@@ -13,9 +13,8 @@
  *   --output FILE   Output prefix for CSV/JSON files (default: context-analysis)
  */
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
-import * as fs from "fs";
-import * as path from "path";
+import * as fs from 'node:fs';
+import { query } from '@anthropic-ai/claude-agent-sdk';
 
 // ============================================================================
 // Types
@@ -79,9 +78,9 @@ interface MessageRow {
   running_sum_output: number;
 
   // Combined metric (cache_read + cache_create)
-  combined_rc: number;           // This message's cache_read + cache_create
+  combined_rc: number; // This message's cache_read + cache_create
   running_max_combined_rc: number; // Max(combined_rc) seen so far
-  first_combined_rc: number;     // First message's combined_rc (for growth calc)
+  first_combined_rc: number; // First message's combined_rc (for growth calc)
 
   // Calculated context (various formulas)
   formula_max_only: number;
@@ -160,33 +159,33 @@ interface AnalysisResult {
 const MAX_CONTEXT_TOKENS = 200_000;
 
 const TEST_PROMPTS_NO_SUBAGENT = [
-  "What is 2 + 2? Reply with just the number.",
-  "What is the capital of France? Reply with just the city name.",
-  "What color is the sky? Reply with just one word.",
-  "Name three programming languages.",
-  "What is the largest planet in our solar system?",
-  "Explain what a variable is in programming in 2-3 sentences.",
-  "What is the difference between a list and a dictionary in Python?",
-  "Name the four cardinal directions.",
-  "What does API stand for?",
-  "Explain what recursion is in one paragraph.",
-  "What is the time complexity of binary search?",
-  "Name three popular JavaScript frameworks.",
+  'What is 2 + 2? Reply with just the number.',
+  'What is the capital of France? Reply with just the city name.',
+  'What color is the sky? Reply with just one word.',
+  'Name three programming languages.',
+  'What is the largest planet in our solar system?',
+  'Explain what a variable is in programming in 2-3 sentences.',
+  'What is the difference between a list and a dictionary in Python?',
+  'Name the four cardinal directions.',
+  'What does API stand for?',
+  'Explain what recursion is in one paragraph.',
+  'What is the time complexity of binary search?',
+  'Name three popular JavaScript frameworks.',
 ];
 
 const TEST_PROMPTS_WITH_SUBAGENT = [
-  "Read the package.json file and tell me what dependencies this project has.",
-  "Look at the src/router.ts file and summarize what it does in 2-3 sentences.",
-  "Find all TypeScript files in the src directory and list them.",
-  "Read the CLAUDE.md file and tell me what this project is about.",
-  "Look at src/state.ts and explain the AppState interface.",
+  'Read the package.json file and tell me what dependencies this project has.',
+  'Look at the src/router.ts file and summarize what it does in 2-3 sentences.',
+  'Find all TypeScript files in the src directory and list them.',
+  'Read the CLAUDE.md file and tell me what this project is about.',
+  'Look at src/state.ts and explain the AppState interface.',
   "Search for any files that mention 'context' in their name.",
-  "Read src/arbiter.ts and tell me what MCP tools are defined there.",
-  "Find all files in .claude/knowledge directory.",
-  "Look at the tsconfig.json and tell me the TypeScript target version.",
+  'Read src/arbiter.ts and tell me what MCP tools are defined there.',
+  'Find all files in .claude/knowledge directory.',
+  'Look at the tsconfig.json and tell me the TypeScript target version.',
   "Search for 'spawn_orchestrator' in the codebase and tell me where it's used.",
-  "Read src/orchestrator.ts and summarize its purpose.",
-  "Find any test files in the project and list them.",
+  'Read src/orchestrator.ts and summarize its purpose.',
+  'Find any test files in the project and list them.',
 ];
 
 // ============================================================================
@@ -202,7 +201,7 @@ function parseTokenCount(str: string): number {
   if (cleaned.endsWith('k')) {
     return Math.round(parseFloat(cleaned.slice(0, -1)) * 1000);
   }
-  return parseInt(cleaned) || 0;
+  return parseInt(cleaned, 10) || 0;
 }
 
 /**
@@ -230,18 +229,24 @@ function parseContextOutput(output: string): Partial<ContextSnapshot> {
 
   // Parse markdown table rows: | Category | Tokens | Percentage |
   const tableRowRegex = /\|\s*([^|]+)\s*\|\s*([0-9,.]+k?)\s*\|\s*([0-9.]+)%\s*\|/g;
-  let match;
+  let match: RegExpExecArray | null = null;
   let systemTotal = 0;
 
+  // biome-ignore lint/suspicious/noAssignInExpressions: idiomatic regex exec loop
   while ((match = tableRowRegex.exec(output)) !== null) {
     const category = match[1].trim().toLowerCase();
     const tokens = parseTokenCount(match[2]);
 
     if (category === 'messages') {
       result.messages_tokens = tokens;
-    } else if (category === 'system prompt' || category === 'system tools' ||
-               category === 'mcp tools' || category === 'memory' ||
-               category === 'custom agents' || category === 'memory files') {
+    } else if (
+      category === 'system prompt' ||
+      category === 'system tools' ||
+      category === 'mcp tools' ||
+      category === 'memory' ||
+      category === 'custom agents' ||
+      category === 'memory files'
+    ) {
       systemTotal += tokens;
     }
   }
@@ -306,15 +311,18 @@ class ContextAnalyzer {
   private sumOutput = 0;
 
   // Combined metric tracking: cache_read + cache_create
-  private firstCombinedRC = 0;   // First message's (cache_read + cache_create)
-  private maxCombinedRC = 0;     // Max(cache_read + cache_create) seen
+  private firstCombinedRC = 0; // First message's (cache_read + cache_create)
+  private maxCombinedRC = 0; // Max(cache_read + cache_create) seen
 
   private messages: MessageRow[] = [];
   private seq = 0;
   private startTime: number;
   private sessionId: string | null = null;
 
-  constructor(private cwd: string, private useSubagents: boolean) {
+  constructor(
+    private cwd: string,
+    private useSubagents: boolean,
+  ) {
     this.startTime = Date.now();
   }
 
@@ -323,7 +331,9 @@ class ContextAnalyzer {
    * Uses the current session if available for accurate measurement
    */
   async runContextCommand(label: string): Promise<ContextSnapshot> {
-    console.log(`\n[${label}] Running /context command...${this.sessionId ? ` (session: ${this.sessionId.slice(0, 8)}...)` : ' (new session)'}`);
+    console.log(
+      `\n[${label}] Running /context command...${this.sessionId ? ` (session: ${this.sessionId.slice(0, 8)}...)` : ' (new session)'}`,
+    );
 
     const options: any = {
       cwd: this.cwd,
@@ -355,24 +365,24 @@ class ContextAnalyzer {
       if (msg.type === 'user') {
         const content = (msg as any).message?.content;
         if (typeof content === 'string') {
-          rawOutput += content + '\n';
+          rawOutput += `${content}\n`;
         }
       }
       if (msg.type === 'result') {
         const resultContent = (msg as any).result;
         if (typeof resultContent === 'string') {
-          rawOutput += resultContent + '\n';
+          rawOutput += `${resultContent}\n`;
         }
       }
       // Also check for assistant messages that might contain the output
       if (msg.type === 'assistant') {
         const content = (msg as any).message?.content;
         if (typeof content === 'string' && content.includes('tokens')) {
-          rawOutput += content + '\n';
+          rawOutput += `${content}\n`;
         } else if (Array.isArray(content)) {
           for (const block of content) {
             if (block.type === 'text' && block.text?.includes('tokens')) {
-              rawOutput += block.text + '\n';
+              rawOutput += `${block.text}\n`;
             }
           }
         }
@@ -392,7 +402,9 @@ class ContextAnalyzer {
     };
 
     console.log(`[${label}] Total: ${snapshot.total_tokens} tokens (${snapshot.total_percent}%)`);
-    console.log(`[${label}] Messages: ${snapshot.messages_tokens}, System: ${snapshot.system_tokens}`);
+    console.log(
+      `[${label}] Messages: ${snapshot.messages_tokens}, System: ${snapshot.system_tokens}`,
+    );
 
     return snapshot;
   }
@@ -489,7 +501,9 @@ class ContextAnalyzer {
     this.messages.push(row);
 
     // Log progress
-    console.log(`  [${row.seq}] ${msgId.slice(0, 12)}... r=${cacheRead}, c=${cacheCreate}, r+c=${combinedRC}`);
+    console.log(
+      `  [${row.seq}] ${msgId.slice(0, 12)}... r=${cacheRead}, c=${cacheCreate}, r+c=${combinedRC}`,
+    );
     console.log(`       max(r+c)=${this.maxCombinedRC}, growth=${formulaCombinedGrowth}`);
 
     return row;
@@ -500,7 +514,9 @@ class ContextAnalyzer {
    * Uses session resumption to maintain the same session
    */
   async sendPrompt(prompt: string, promptNum: number): Promise<void> {
-    console.log(`\n[Prompt ${promptNum}] Sending: "${prompt}"${this.sessionId ? ` (session: ${this.sessionId.slice(0, 8)}...)` : ''}`);
+    console.log(
+      `\n[Prompt ${promptNum}] Sending: "${prompt}"${this.sessionId ? ` (session: ${this.sessionId.slice(0, 8)}...)` : ''}`,
+    );
 
     const options: any = {
       cwd: this.cwd,
@@ -515,9 +531,11 @@ class ContextAnalyzer {
     // Add system prompt for first message
     if (!this.sessionId) {
       if (!this.useSubagents) {
-        options.systemPrompt = "You are a helpful assistant. Do NOT use any tools or spawn any subagents. Answer directly and concisely.";
+        options.systemPrompt =
+          'You are a helpful assistant. Do NOT use any tools or spawn any subagents. Answer directly and concisely.';
       } else {
-        options.systemPrompt = "You are a helpful assistant. Use tools as needed to complete tasks. Do NOT use non-blocking subagents - only use blocking tool calls. Be concise in your responses.";
+        options.systemPrompt =
+          'You are a helpful assistant. Use tools as needed to complete tasks. Do NOT use non-blocking subagents - only use blocking tool calls. Be concise in your responses.';
       }
     }
 
@@ -626,50 +644,72 @@ class ContextAnalyzer {
 
 function toCSV(messages: MessageRow[]): string {
   const headers = [
-    'seq', 'timestamp', 'elapsed_ms', 'message_id', 'uuid', 'type',
-    'cache_read', 'cache_create', 'input', 'output',
-    'combined_rc', 'running_max_combined_rc', 'first_combined_rc',
-    'running_max_cache_read', 'running_sum_cache_create', 'running_sum_input', 'running_sum_output',
-    'formula_max_only', 'formula_max_plus_sums', 'formula_create_plus_sums', 'formula_combined_growth',
-    'pct_max_only', 'pct_max_plus_sums', 'pct_create_plus_sums', 'pct_combined_growth',
-    'unique_api_calls', 'text_preview'
+    'seq',
+    'timestamp',
+    'elapsed_ms',
+    'message_id',
+    'uuid',
+    'type',
+    'cache_read',
+    'cache_create',
+    'input',
+    'output',
+    'combined_rc',
+    'running_max_combined_rc',
+    'first_combined_rc',
+    'running_max_cache_read',
+    'running_sum_cache_create',
+    'running_sum_input',
+    'running_sum_output',
+    'formula_max_only',
+    'formula_max_plus_sums',
+    'formula_create_plus_sums',
+    'formula_combined_growth',
+    'pct_max_only',
+    'pct_max_plus_sums',
+    'pct_create_plus_sums',
+    'pct_combined_growth',
+    'unique_api_calls',
+    'text_preview',
   ];
 
-  const rows = messages.map(m => [
-    m.seq,
-    m.timestamp,
-    m.elapsed_ms,
-    m.message_id,
-    m.uuid,
-    m.type,
-    m.cache_read,
-    m.cache_create,
-    m.input,
-    m.output,
-    m.combined_rc,
-    m.running_max_combined_rc,
-    m.first_combined_rc,
-    m.running_max_cache_read,
-    m.running_sum_cache_create,
-    m.running_sum_input,
-    m.running_sum_output,
-    m.formula_max_only,
-    m.formula_max_plus_sums,
-    m.formula_create_plus_sums,
-    m.formula_combined_growth,
-    m.pct_max_only.toFixed(2),
-    m.pct_max_plus_sums.toFixed(2),
-    m.pct_create_plus_sums.toFixed(2),
-    m.pct_combined_growth.toFixed(2),
-    m.unique_api_calls,
-    `"${m.text_preview.replace(/"/g, '""')}"`,
-  ].join(','));
+  const rows = messages.map((m) =>
+    [
+      m.seq,
+      m.timestamp,
+      m.elapsed_ms,
+      m.message_id,
+      m.uuid,
+      m.type,
+      m.cache_read,
+      m.cache_create,
+      m.input,
+      m.output,
+      m.combined_rc,
+      m.running_max_combined_rc,
+      m.first_combined_rc,
+      m.running_max_cache_read,
+      m.running_sum_cache_create,
+      m.running_sum_input,
+      m.running_sum_output,
+      m.formula_max_only,
+      m.formula_max_plus_sums,
+      m.formula_create_plus_sums,
+      m.formula_combined_growth,
+      m.pct_max_only.toFixed(2),
+      m.pct_max_plus_sums.toFixed(2),
+      m.pct_create_plus_sums.toFixed(2),
+      m.pct_combined_growth.toFixed(2),
+      m.unique_api_calls,
+      `"${m.text_preview.replace(/"/g, '""')}"`,
+    ].join(','),
+  );
 
   return [headers.join(','), ...rows].join('\n');
 }
 
 function printSummary(result: AnalysisResult): void {
-  console.log('\n' + '='.repeat(60));
+  console.log(`\n${'='.repeat(60)}`);
   console.log('ANALYSIS SUMMARY');
   console.log('='.repeat(60));
 
@@ -689,11 +729,15 @@ function printSummary(result: AnalysisResult): void {
   const s = result.summary;
   console.log(`first(r+c):             ${s.first_combined_rc.toLocaleString().padStart(10)}`);
   console.log(`max(r+c):               ${s.final_max_combined_rc.toLocaleString().padStart(10)}`);
-  console.log(`growth:                 ${s.calculated_combined_growth.toLocaleString().padStart(10)}`);
+  console.log(
+    `growth:                 ${s.calculated_combined_growth.toLocaleString().padStart(10)}`,
+  );
 
   if (result.final) {
     console.log('\n--- Actual /context Output ---');
-    console.log(`Total:    ${(result.final.total_tokens || 0).toLocaleString().padStart(10)} (${result.final.total_percent}%)`);
+    console.log(
+      `Total:    ${(result.final.total_tokens || 0).toLocaleString().padStart(10)} (${result.final.total_percent}%)`,
+    );
     console.log(`Messages: ${(result.final.messages_tokens || 0).toLocaleString().padStart(10)}`);
     console.log(`System:   ${(result.final.system_tokens || 0).toLocaleString().padStart(10)}`);
 
@@ -702,41 +746,58 @@ function printSummary(result: AnalysisResult): void {
       const baselineTotal = result.baseline.total_tokens;
       const actual = result.final.total_tokens || 0;
 
-      console.log('\n' + '='.repeat(60));
+      console.log(`\n${'='.repeat(60)}`);
       console.log('★ THE FORMULA: baseline + max(r+c) - first(r+c) + sum(i+o) ★');
       console.log('='.repeat(60));
       console.log(`Baseline total:         ${baselineTotal.toLocaleString().padStart(10)}`);
-      console.log(`max(cache_read+create): ${s.final_max_combined_rc.toLocaleString().padStart(10)}`);
-      console.log(`first(cache_read+create): ${s.first_combined_rc.toLocaleString().padStart(9)} (subtract)`);
+      console.log(
+        `max(cache_read+create): ${s.final_max_combined_rc.toLocaleString().padStart(10)}`,
+      );
+      console.log(
+        `first(cache_read+create): ${s.first_combined_rc.toLocaleString().padStart(9)} (subtract)`,
+      );
       console.log(`sum(input):             ${s.final_sum_input.toLocaleString().padStart(10)}`);
       console.log(`sum(output):            ${s.final_sum_output.toLocaleString().padStart(10)}`);
 
-      const formulaNew = baselineTotal + s.calculated_combined_growth + s.final_sum_input + s.final_sum_output;
+      const formulaNew =
+        baselineTotal + s.calculated_combined_growth + s.final_sum_input + s.final_sum_output;
       const diffNew = formulaNew - actual;
-      const pctErrorNew = (diffNew / actual * 100);
+      const pctErrorNew = (diffNew / actual) * 100;
 
       console.log(`─────────────────────────────────────`);
       console.log(`Calculated:             ${formulaNew.toLocaleString().padStart(10)}`);
       console.log(`Actual (/context):      ${actual.toLocaleString().padStart(10)}`);
-      console.log(`Difference:             ${diffNew >= 0 ? '+' : ''}${diffNew.toLocaleString().padStart(9)} (${pctErrorNew >= 0 ? '+' : ''}${pctErrorNew.toFixed(2)}%)`);
+      console.log(
+        `Difference:             ${diffNew >= 0 ? '+' : ''}${diffNew.toLocaleString().padStart(9)} (${pctErrorNew >= 0 ? '+' : ''}${pctErrorNew.toFixed(2)}%)`,
+      );
 
       // Also show the old formula for comparison
       console.log('\n--- Old Formula Comparison ---');
       const firstCacheCreate = result.messages[0].cache_create;
-      const formulaOld = baselineTotal + (s.final_sum_cache_create - firstCacheCreate) + s.final_sum_input + s.final_sum_output;
+      const formulaOld =
+        baselineTotal +
+        (s.final_sum_cache_create - firstCacheCreate) +
+        s.final_sum_input +
+        s.final_sum_output;
       const diffOld = formulaOld - actual;
-      const pctErrorOld = (diffOld / actual * 100);
+      const pctErrorOld = (diffOld / actual) * 100;
       console.log(`Old (baseline + sum(create) - first(create) + in + out):`);
-      console.log(`  Calculated: ${formulaOld.toLocaleString().padStart(10)}, Error: ${diffOld >= 0 ? '+' : ''}${pctErrorOld.toFixed(2)}%`);
+      console.log(
+        `  Calculated: ${formulaOld.toLocaleString().padStart(10)}, Error: ${diffOld >= 0 ? '+' : ''}${pctErrorOld.toFixed(2)}%`,
+      );
 
       // Summary comparison
       console.log('\n--- Formula Accuracy Comparison ---');
-      console.log(`NEW (baseline + max(r+c) - first(r+c)):  ${Math.abs(pctErrorNew).toFixed(2)}% error`);
-      console.log(`OLD (baseline + Σcache_create - first): ${Math.abs(pctErrorOld).toFixed(2)}% error`);
+      console.log(
+        `NEW (baseline + max(r+c) - first(r+c)):  ${Math.abs(pctErrorNew).toFixed(2)}% error`,
+      );
+      console.log(
+        `OLD (baseline + Σcache_create - first): ${Math.abs(pctErrorOld).toFixed(2)}% error`,
+      );
     }
   }
 
-  console.log('\n' + '='.repeat(60));
+  console.log(`\n${'='.repeat(60)}`);
 }
 
 // ============================================================================
@@ -747,12 +808,13 @@ async function main(): Promise<void> {
   const args = process.argv.slice(2);
 
   const useSubagents = args.includes('--subagents');
-  const outputPrefix = args.find(a => a.startsWith('--output='))?.split('=')[1] || 'context-analysis';
+  const outputPrefix =
+    args.find((a) => a.startsWith('--output='))?.split('=')[1] || 'context-analysis';
 
   let numPrompts = 3;
-  const promptsArg = args.find(a => a.startsWith('--prompts='));
+  const promptsArg = args.find((a) => a.startsWith('--prompts='));
   if (promptsArg) {
-    numPrompts = parseInt(promptsArg.split('=')[1]) || 3;
+    numPrompts = parseInt(promptsArg.split('=')[1], 10) || 3;
   }
 
   const prompts = useSubagents
@@ -778,7 +840,6 @@ async function main(): Promise<void> {
 
     fs.writeFileSync(csvFile, toCSV(result.messages));
     console.log(`CSV output saved to: ${csvFile}`);
-
   } catch (error) {
     console.error('Analysis failed:', error);
     process.exit(1);

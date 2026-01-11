@@ -1,28 +1,28 @@
 // Message Router - Core component managing sessions and routing messages
 // Handles Arbiter and Orchestrator session lifecycle and message routing
 
-import { query } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  SDKMessage,
-  SDKSystemMessage,
-  SDKAssistantMessage,
-  SDKResultMessage,
-  Options,
-  HookEvent,
   HookCallbackMatcher,
-} from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
-import { saveSession, PersistedSession } from './session-persistence.js';
-import { zodToJsonSchema } from "zod-to-json-schema";
+  HookEvent,
+  Options,
+  SDKAssistantMessage,
+  SDKMessage,
+  SDKResultMessage,
+  SDKSystemMessage,
+} from '@anthropic-ai/claude-agent-sdk';
+import { query } from '@anthropic-ai/claude-agent-sdk';
+import { z } from 'zod';
+import { zodToJsonSchema } from 'zod-to-json-schema';
+import { type PersistedSession, saveSession } from './session-persistence.js';
 
 // Helper for async delays
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Retry constants for crash recovery
 const MAX_RETRIES = 3;
-const RETRY_DELAYS = [1000, 2000, 4000];  // 1s, 2s, 4s exponential backoff
+const RETRY_DELAYS = [1000, 2000, 4000]; // 1s, 2s, 4s exponential backoff
 
 // Arbiter's allowed tools: MCP tools + read-only exploration
 const ARBITER_ALLOWED_TOOLS = [
@@ -33,7 +33,7 @@ const ARBITER_ALLOWED_TOOLS = [
   'Grep',
   'WebSearch',
   'WebFetch',
-  'Task',  // For Explore subagent only
+  'Task', // For Explore subagent only
 ] as const;
 
 // Orchestrator's allowed tools: full tool access for work
@@ -49,62 +49,64 @@ const ORCHESTRATOR_ALLOWED_TOOLS = [
   'WebFetch',
 ] as const;
 
-import type { AppState, OrchestratorState } from "./state.js";
+import type { AppState } from './state.js';
 import {
+  addMessage,
+  clearCurrentOrchestrator,
+  setCurrentOrchestrator,
+  setMode,
+  toRoman,
   updateArbiterContext,
   updateOrchestratorContext,
-  setCurrentOrchestrator,
-  clearCurrentOrchestrator,
-  setMode,
-  addMessage,
   updateOrchestratorTool,
-  toRoman,
-} from "./state.js";
+} from './state.js';
 
 /**
  * Schema for Orchestrator structured output
  * Simple routing decision: does this message expect a response?
  */
 const OrchestratorOutputSchema = z.object({
-  expects_response: z.boolean().describe(
-    "True if you need input from the Arbiter (questions, introductions, handoffs). False for status updates during heads-down work."
-  ),
-  message: z.string().describe("The message content"),
+  expects_response: z
+    .boolean()
+    .describe(
+      'True if you need input from the Arbiter (questions, introductions, handoffs). False for status updates during heads-down work.',
+    ),
+  message: z.string().describe('The message content'),
 });
 
 type OrchestratorOutput = z.infer<typeof OrchestratorOutputSchema>;
 
 // Convert to JSON Schema for SDK
 const orchestratorOutputJsonSchema = zodToJsonSchema(OrchestratorOutputSchema, {
-  $refStrategy: "none",
+  $refStrategy: 'none',
 });
 
 import {
   ARBITER_SYSTEM_PROMPT,
-  createArbiterMcpServer,
-  createArbiterHooks,
   type ArbiterCallbacks,
   type ArbiterHooksCallbacks,
-} from "./arbiter.js";
+  createArbiterHooks,
+  createArbiterMcpServer,
+} from './arbiter.js';
 
 import {
-  ORCHESTRATOR_SYSTEM_PROMPT,
   createOrchestratorHooks,
+  ORCHESTRATOR_SYSTEM_PROMPT,
   type OrchestratorCallbacks,
-} from "./orchestrator.js";
+} from './orchestrator.js';
 
 /**
  * Log entry types for debug logging
  */
 export type DebugLogEntry = {
   type: 'message' | 'tool' | 'system' | 'sdk';
-  speaker?: string;  // For messages: 'human', 'arbiter', 'Orchestrator I', etc.
+  speaker?: string; // For messages: 'human', 'arbiter', 'Orchestrator I', etc.
   text: string;
-  filtered?: boolean;  // True if this was filtered from main chat
+  filtered?: boolean; // True if this was filtered from main chat
   details?: any;
-  agent?: 'arbiter' | 'orchestrator';  // For SDK messages
-  sessionId?: string;  // SDK session ID
-  messageType?: string;  // SDK message type (system, assistant, user, result)
+  agent?: 'arbiter' | 'orchestrator'; // For SDK messages
+  sessionId?: string; // SDK session ID
+  messageType?: string; // SDK message type (system, assistant, user, result)
 };
 
 /**
@@ -119,14 +121,11 @@ export type RouterCallbacks = {
   /** Called when an Orchestrator produces text output */
   onOrchestratorMessage: (orchestratorNumber: number, text: string) => void;
   /** Called when context usage is updated */
-  onContextUpdate: (
-    arbiterPercent: number,
-    orchestratorPercent: number | null
-  ) => void;
+  onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => void;
   /** Called when a tool is used by the Orchestrator */
   onToolUse: (tool: string, count: number) => void;
   /** Called when the routing mode changes */
-  onModeChange: (mode: AppState["mode"]) => void;
+  onModeChange: (mode: AppState['mode']) => void;
   /** Called when waiting for a response starts */
   onWaitingStart?: (waitingFor: 'arbiter' | 'orchestrator') => void;
   /** Called when waiting for a response stops */
@@ -161,7 +160,7 @@ async function pollContextForSession(sessionId: string): Promise<number | null> 
       prompt: '/context',
       options: {
         resume: sessionId,
-        forkSession: true,  // Fork to avoid polluting main session
+        forkSession: true, // Fork to avoid polluting main session
         permissionMode: 'bypassPermissions',
       } as Options,
     });
@@ -174,7 +173,9 @@ async function pollContextForSession(sessionId: string): Promise<number | null> 
         const content = (msg as { message?: { content?: string } }).message?.content;
         if (typeof content === 'string') {
           // Match: **Tokens:** 18.4k / 200.0k (9%)
-          const match = content.match(/\*\*Tokens:\*\*\s*([0-9.]+)k\s*\/\s*200\.?0?k\s*\((\d+)%\)/i);
+          const match = content.match(
+            /\*\*Tokens:\*\*\s*([0-9.]+)k\s*\/\s*200\.?0?k\s*\((\d+)%\)/i,
+          );
           if (match) {
             percent = parseInt(match[2], 10);
           }
@@ -183,7 +184,7 @@ async function pollContextForSession(sessionId: string): Promise<number | null> 
     }
 
     return percent;
-  } catch (error) {
+  } catch (_error) {
     // Silently fail - context polling is best-effort
     return null;
   }
@@ -194,15 +195,15 @@ async function pollContextForSession(sessionId: string): Promise<number | null> 
  * This replaces the scattered properties that were previously on Router
  */
 interface OrchestratorSession {
-  id: string;                           // Unique ID (e.g., "orch-1234567890")
-  number: number;                       // Roman numeral suffix (I, II, III...)
-  sessionId: string;                    // SDK session ID for resuming
-  query: ReturnType<typeof query> | null;  // The active query generator
-  abortController: AbortController;     // For killing the session
-  toolCallCount: number;                // Total tool calls made (was in Map, now here)
-  queue: string[];                      // Queued messages awaiting flush to Arbiter
-  lastActivityTime: number;             // For watchdog timeout detection
-  hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>;  // SDK hooks for tool tracking
+  id: string; // Unique ID (e.g., "orch-1234567890")
+  number: number; // Roman numeral suffix (I, II, III...)
+  sessionId: string; // SDK session ID for resuming
+  query: ReturnType<typeof query> | null; // The active query generator
+  abortController: AbortController; // For killing the session
+  toolCallCount: number; // Total tool calls made (was in Map, now here)
+  queue: string[]; // Queued messages awaiting flush to Arbiter
+  lastActivityTime: number; // For watchdog timeout detection
+  hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>; // SDK hooks for tool tracking
 }
 
 /**
@@ -237,9 +238,10 @@ function formatSdkMessage(message: SDKMessage): string {
             parts.push(`tool_use: ${toolBlock.name}(${truncate(inputStr, 80)})`);
           } else if (block.type === 'tool_result') {
             const resultBlock = block as { type: 'tool_result'; tool_use_id: string; content: any };
-            const contentStr = typeof resultBlock.content === 'string'
-              ? resultBlock.content
-              : JSON.stringify(resultBlock.content);
+            const contentStr =
+              typeof resultBlock.content === 'string'
+                ? resultBlock.content
+                : JSON.stringify(resultBlock.content);
             parts.push(`tool_result: ${truncate(contentStr, 80)}`);
           } else {
             parts.push(`${block.type}: ...`);
@@ -266,7 +268,8 @@ function formatSdkMessage(message: SDKMessage): string {
       const resultMsg = message as SDKResultMessage;
       if (resultMsg.subtype === 'success') {
         const usage = resultMsg.usage;
-        const total = (usage.input_tokens || 0) +
+        const total =
+          (usage.input_tokens || 0) +
           (usage.cache_read_input_tokens || 0) +
           (usage.cache_creation_input_tokens || 0);
         const pct = ((total / MAX_CONTEXT_TOKENS) * 100).toFixed(1);
@@ -288,7 +291,7 @@ function truncate(str: string, maxLength: number): string {
   // Remove newlines for cleaner display
   const clean = str.replace(/\n/g, '\\n');
   if (clean.length <= maxLength) return clean;
-  return clean.substring(0, maxLength - 3) + '...';
+  return `${clean.substring(0, maxLength - 3)}...`;
 }
 
 /**
@@ -304,7 +307,7 @@ function formatQueueForArbiter(
   queue: string[],
   triggerMessage: string,
   triggerType: 'input' | 'handoff' | 'human',
-  orchNumber: number
+  orchNumber: number,
 ): string {
   const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
   const parts: string[] = [];
@@ -338,11 +341,7 @@ function formatQueueForArbiter(
 /**
  * Format a timeout message for the Arbiter
  */
-function formatTimeoutForArbiter(
-  queue: string[],
-  orchNumber: number,
-  idleMinutes: number
-): string {
+function formatTimeoutForArbiter(queue: string[], orchNumber: number, idleMinutes: number): string {
   const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
   const parts: string[] = [];
 
@@ -389,9 +388,6 @@ export class Router {
   // Pending orchestrator spawn flag
   private pendingOrchestratorSpawn: boolean = false;
   private pendingOrchestratorNumber: number = 0;
-
-  // Track if we're currently processing messages
-  private isProcessing = false;
 
   // Abort controllers for graceful shutdown
   private arbiterAbortController: AbortController | null = null;
@@ -476,7 +472,7 @@ export class Router {
     // Notify TUI with updated values from state
     this.callbacks.onContextUpdate(
       this.state.arbiterContextPercent,
-      this.state.currentOrchestrator?.contextPercent ?? null
+      this.state.currentOrchestrator?.contextPercent ?? null,
     );
   }
 
@@ -507,19 +503,14 @@ export class Router {
    */
   async sendHumanMessage(text: string): Promise<void> {
     // Log the human message and notify TUI immediately
-    addMessage(this.state, "human", text);
+    addMessage(this.state, 'human', text);
     this.callbacks.onHumanMessage(text);
 
-    if (this.state.mode === "arbiter_to_orchestrator" && this.currentOrchestratorSession) {
+    if (this.state.mode === 'arbiter_to_orchestrator' && this.currentOrchestratorSession) {
       const session = this.currentOrchestratorSession;
 
       // Human interjection during orchestrator work - flush queue with context
-      const formattedMessage = formatQueueForArbiter(
-        session.queue,
-        text,
-        'human',
-        session.number
-      );
+      const formattedMessage = formatQueueForArbiter(session.queue, text, 'human', session.number);
 
       // Log the flush for debugging
       this.callbacks.onDebugLog?.({
@@ -599,8 +590,8 @@ export class Router {
     clearCurrentOrchestrator(this.state);
 
     // 6. Reset mode
-    setMode(this.state, "human_to_arbiter");
-    this.callbacks.onModeChange("human_to_arbiter");
+    setMode(this.state, 'human_to_arbiter');
+    this.callbacks.onModeChange('human_to_arbiter');
 
     // 7. Update context display (no orchestrator)
     this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
@@ -655,11 +646,7 @@ export class Router {
     });
 
     // Format timeout message for Arbiter
-    const timeoutMessage = formatTimeoutForArbiter(
-      session.queue,
-      session.number,
-      idleMinutes
-    );
+    const timeoutMessage = formatTimeoutForArbiter(session.queue, session.number, idleMinutes);
 
     // Cleanup the orchestrator (this also clears the queue)
     this.cleanupOrchestrator();
@@ -682,7 +669,7 @@ export class Router {
   private createArbiterOptions(resumeSessionId?: string): Options {
     return {
       systemPrompt: ARBITER_SYSTEM_PROMPT,
-      mcpServers: this.arbiterMcpServer ? { "arbiter-tools": this.arbiterMcpServer } : undefined,
+      mcpServers: this.arbiterMcpServer ? { 'arbiter-tools': this.arbiterMcpServer } : undefined,
       hooks: this.arbiterHooks ?? undefined,
       abortController: this.arbiterAbortController ?? new AbortController(),
       permissionMode: 'bypassPermissions',
@@ -701,7 +688,7 @@ export class Router {
   private createOrchestratorOptions(
     hooks: object,
     abortController: AbortController,
-    resumeSessionId?: string
+    resumeSessionId?: string,
   ): Options {
     return {
       systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
@@ -757,10 +744,7 @@ export class Router {
     };
 
     // Create MCP server with Arbiter tools
-    const mcpServer = createArbiterMcpServer(
-      arbiterCallbacks,
-      () => this.orchestratorCount
-    );
+    const mcpServer = createArbiterMcpServer(arbiterCallbacks, () => this.orchestratorCount);
     this.arbiterMcpServer = mcpServer;
 
     // Create hooks for tool tracking
@@ -793,7 +777,7 @@ Your task now is to achieve COMPLETE UNDERSTANDING before any work begins. This 
 Only when we have achieved 100% alignment on vision, scope, and approach - only when you could explain this task to an Orchestrator with complete confidence - only then do we proceed.
 
 Take your time. This phase determines everything that follows.`
-      : "Speak, mortal.";
+      : 'Speak, mortal.';
 
     this.arbiterQuery = query({
       prompt: initialPrompt,
@@ -856,7 +840,7 @@ Take your time. This phase determines everything that follows.`
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
       // Context percent getter - returns state value (updated by polling)
-      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
+      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0,
     );
 
     // Create options using helper (no resume for initial session)
@@ -864,7 +848,7 @@ Take your time. This phase determines everything that follows.`
 
     // Create the orchestrator query
     const orchestratorQuery = query({
-      prompt: "Introduce yourself and await instructions from the Arbiter.",
+      prompt: 'Introduce yourself and await instructions from the Arbiter.',
       options,
     });
 
@@ -872,7 +856,7 @@ Take your time. This phase determines everything that follows.`
     this.currentOrchestratorSession = {
       id: orchId,
       number,
-      sessionId: "", // Will be set when we get the init message
+      sessionId: '', // Will be set when we get the init message
       query: orchestratorQuery,
       abortController,
       toolCallCount: 0,
@@ -885,13 +869,13 @@ Take your time. This phase determines everything that follows.`
     // We'll update the session ID when we get the init message
     setCurrentOrchestrator(this.state, {
       id: orchId,
-      sessionId: "", // Will be set when we get the init message
+      sessionId: '', // Will be set when we get the init message
       number,
     });
 
     // Switch mode
-    setMode(this.state, "arbiter_to_orchestrator");
-    this.callbacks.onModeChange("arbiter_to_orchestrator");
+    setMode(this.state, 'arbiter_to_orchestrator');
+    this.callbacks.onModeChange('arbiter_to_orchestrator');
 
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
@@ -899,7 +883,7 @@ Take your time. This phase determines everything that follows.`
     // Update context display to show orchestrator (initially at 0%)
     this.callbacks.onContextUpdate(
       this.state.arbiterContextPercent,
-      this.state.currentOrchestrator?.contextPercent ?? null
+      this.state.currentOrchestrator?.contextPercent ?? null,
     );
 
     // Start watchdog timer
@@ -962,7 +946,7 @@ Take your time. This phase determines everything that follows.`
     const hooks = createOrchestratorHooks(
       orchestratorCallbacks,
       // Context percent getter - returns state value (updated by polling)
-      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
+      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0,
     );
 
     // Create options using helper with resume
@@ -970,7 +954,7 @@ Take your time. This phase determines everything that follows.`
 
     // Create the orchestrator query with a continuation prompt (not introduction)
     const orchestratorQuery = query({
-      prompt: "[System: Session resumed. Continue where you left off.]",
+      prompt: '[System: Session resumed. Continue where you left off.]',
       options,
     });
 
@@ -979,7 +963,7 @@ Take your time. This phase determines everything that follows.`
     this.currentOrchestratorSession = {
       id: orchId,
       number,
-      sessionId: sessionId,  // Already known, don't set to empty string
+      sessionId: sessionId, // Already known, don't set to empty string
       query: orchestratorQuery,
       abortController,
       toolCallCount: 0,
@@ -996,8 +980,8 @@ Take your time. This phase determines everything that follows.`
     });
 
     // Switch mode
-    setMode(this.state, "arbiter_to_orchestrator");
-    this.callbacks.onModeChange("arbiter_to_orchestrator");
+    setMode(this.state, 'arbiter_to_orchestrator');
+    this.callbacks.onModeChange('arbiter_to_orchestrator');
 
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
@@ -1005,7 +989,7 @@ Take your time. This phase determines everything that follows.`
     // Update context display to show orchestrator (initially at 0%)
     this.callbacks.onContextUpdate(
       this.state.arbiterContextPercent,
-      this.state.currentOrchestrator?.contextPercent ?? null
+      this.state.currentOrchestrator?.contextPercent ?? null,
     );
 
     // Start watchdog timer
@@ -1020,7 +1004,7 @@ Take your time. This phase determines everything that follows.`
    */
   private async sendToArbiter(text: string): Promise<void> {
     if (!this.arbiterQuery) {
-      console.error("Arbiter session not started");
+      console.error('Arbiter session not started');
       return;
     }
 
@@ -1043,7 +1027,7 @@ Take your time. This phase determines everything that follows.`
    */
   private async sendToOrchestrator(text: string): Promise<void> {
     if (!this.currentOrchestratorSession) {
-      console.error("No active orchestrator session");
+      console.error('No active orchestrator session');
       return;
     }
 
@@ -1054,7 +1038,7 @@ Take your time. This phase determines everything that follows.`
     const options = this.createOrchestratorOptions(
       this.currentOrchestratorSession.hooks,
       this.currentOrchestratorSession.abortController,
-      this.currentOrchestratorSession.sessionId
+      this.currentOrchestratorSession.sessionId,
     );
 
     const newQuery = query({
@@ -1075,7 +1059,7 @@ Take your time. This phase determines everything that follows.`
    */
   private async handleArbiterOutput(text: string): Promise<void> {
     // Log the message (always, for history/debug)
-    addMessage(this.state, "arbiter", text);
+    addMessage(this.state, 'arbiter', text);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
@@ -1087,10 +1071,7 @@ Take your time. This phase determines everything that follows.`
     this.callbacks.onArbiterMessage(text);
 
     // If we're in orchestrator mode, forward to the orchestrator
-    if (
-      this.state.mode === "arbiter_to_orchestrator" &&
-      this.state.currentOrchestrator
-    ) {
+    if (this.state.mode === 'arbiter_to_orchestrator' && this.state.currentOrchestrator) {
       await this.sendToOrchestrator(text);
     }
   }
@@ -1102,7 +1083,7 @@ Take your time. This phase determines everything that follows.`
    */
   private async handleOrchestratorOutput(output: OrchestratorOutput): Promise<void> {
     if (!this.currentOrchestratorSession) {
-      console.error("No active orchestrator for output");
+      console.error('No active orchestrator for output');
       return;
     }
 
@@ -1139,7 +1120,7 @@ Take your time. This phase determines everything that follows.`
         session.queue,
         message,
         triggerType,
-        orchNumber
+        orchNumber,
       );
 
       // Log the flush for debugging
@@ -1170,9 +1151,7 @@ Take your time. This phase determines everything that follows.`
   /**
    * Process messages from the Arbiter session with retry logic for crash recovery
    */
-  private async processArbiterMessages(
-    generator: ReturnType<typeof query>
-  ): Promise<void> {
+  private async processArbiterMessages(generator: ReturnType<typeof query>): Promise<void> {
     this.isProcessing = true;
     let retries = 0;
     let currentGenerator: ReturnType<typeof query> = generator;
@@ -1217,7 +1196,7 @@ Take your time. This phase determines everything that follows.`
           const options = this.createArbiterOptions(this.state.arbiterSessionId ?? undefined);
 
           currentGenerator = query({
-            prompt: "[System: Session resumed after error. Continue where you left off.]",
+            prompt: '[System: Session resumed after error. Continue where you left off.]',
             options,
           });
           this.arbiterQuery = currentGenerator;
@@ -1236,7 +1215,7 @@ Take your time. This phase determines everything that follows.`
         await this.startOrchestratorSession(number);
       }
     } catch (error) {
-      console.error("Error processing Arbiter messages:", error);
+      console.error('Error processing Arbiter messages:', error);
       throw error;
     } finally {
       this.isProcessing = false;
@@ -1258,8 +1237,8 @@ Take your time. This phase determines everything that follows.`
     });
 
     switch (message.type) {
-      case "system":
-        if ((message as SDKSystemMessage).subtype === "init") {
+      case 'system':
+        if ((message as SDKSystemMessage).subtype === 'init') {
           // Capture session ID
           this.state.arbiterSessionId = message.session_id;
 
@@ -1267,27 +1246,26 @@ Take your time. This phase determines everything that follows.`
           saveSession(
             message.session_id,
             this.currentOrchestratorSession?.sessionId ?? null,
-            this.currentOrchestratorSession?.number ?? null
+            this.currentOrchestratorSession?.number ?? null,
           );
         }
         break;
 
-      case "assistant":
+      case 'assistant': {
         // Extract text content from the assistant message
         const assistantMessage = message as SDKAssistantMessage;
 
         // Track tool use from Arbiter (MCP tools like spawn_orchestrator)
         this.trackToolUseFromAssistant(assistantMessage, 'arbiter');
 
-        const textContent = this.extractTextFromAssistantMessage(
-          assistantMessage
-        );
+        const textContent = this.extractTextFromAssistantMessage(assistantMessage);
         if (textContent) {
           await this.handleArbiterOutput(textContent);
         }
         break;
+      }
 
-      case "result":
+      case 'result':
         // Result messages logged for debugging
         // Context is tracked via periodic polling, not per-message
         break;
@@ -1297,9 +1275,7 @@ Take your time. This phase determines everything that follows.`
   /**
    * Process messages from an Orchestrator session with retry logic for crash recovery
    */
-  private async processOrchestratorMessages(
-    generator: ReturnType<typeof query>
-  ): Promise<void> {
+  private async processOrchestratorMessages(generator: ReturnType<typeof query>): Promise<void> {
     let retries = 0;
     let currentGenerator: ReturnType<typeof query> = generator;
 
@@ -1339,7 +1315,7 @@ Take your time. This phase determines everything that follows.`
         // Check if we've exceeded max retries
         if (retries >= MAX_RETRIES) {
           // Orchestrator can't be resumed - cleanup and return (don't crash the whole app)
-          console.error("Orchestrator exceeded max retries, cleaning up:", error);
+          console.error('Orchestrator exceeded max retries, cleaning up:', error);
           this.cleanupOrchestrator();
           return;
         }
@@ -1357,11 +1333,11 @@ Take your time. This phase determines everything that follows.`
         const options = this.createOrchestratorOptions(
           this.currentOrchestratorSession.hooks,
           this.currentOrchestratorSession.abortController,
-          this.currentOrchestratorSession.sessionId
+          this.currentOrchestratorSession.sessionId,
         );
 
         currentGenerator = query({
-          prompt: "[System: Session resumed after error. Continue where you left off.]",
+          prompt: '[System: Session resumed after error. Continue where you left off.]',
           options,
         });
         this.currentOrchestratorSession.query = currentGenerator;
@@ -1388,8 +1364,8 @@ Take your time. This phase determines everything that follows.`
     });
 
     switch (message.type) {
-      case "system":
-        if ((message as SDKSystemMessage).subtype === "init") {
+      case 'system':
+        if ((message as SDKSystemMessage).subtype === 'init') {
           // Update orchestrator session ID on both the session and TUI state
           if (this.currentOrchestratorSession) {
             this.currentOrchestratorSession.sessionId = message.session_id;
@@ -1402,17 +1378,17 @@ Take your time. This phase determines everything that follows.`
           saveSession(
             this.state.arbiterSessionId!,
             message.session_id,
-            this.currentOrchestratorSession?.number ?? null
+            this.currentOrchestratorSession?.number ?? null,
           );
         }
         break;
 
-      case "assistant":
+      case 'assistant':
         // Note: Context is tracked via periodic polling, not per-message
         // We don't extract text from assistant messages - output comes from structured_output
         break;
 
-      case "result":
+      case 'result': {
         // Handle structured output from successful result messages
         const resultMessage = message as SDKResultMessage;
         if (resultMessage.subtype === 'success') {
@@ -1433,6 +1409,7 @@ Take your time. This phase determines everything that follows.`
           }
         }
         break;
+      }
     }
   }
 
@@ -1440,13 +1417,11 @@ Take your time. This phase determines everything that follows.`
    * Extract text content from an assistant message
    * The message.message.content can be a string or an array of content blocks
    */
-  private extractTextFromAssistantMessage(
-    message: SDKAssistantMessage
-  ): string | null {
+  private extractTextFromAssistantMessage(message: SDKAssistantMessage): string | null {
     const content = message.message.content;
 
     // Handle string content
-    if (typeof content === "string") {
+    if (typeof content === 'string') {
       return content;
     }
 
@@ -1454,12 +1429,12 @@ Take your time. This phase determines everything that follows.`
     if (Array.isArray(content)) {
       const textParts: string[] = [];
       for (const block of content) {
-        if (block.type === "text") {
-          textParts.push((block as { type: "text"; text: string }).text);
+        if (block.type === 'text') {
+          textParts.push((block as { type: 'text'; text: string }).text);
         }
         // We ignore tool_use blocks here as they're handled separately
       }
-      return textParts.length > 0 ? textParts.join("\n") : null;
+      return textParts.length > 0 ? textParts.join('\n') : null;
     }
 
     return null;
@@ -1471,7 +1446,7 @@ Take your time. This phase determines everything that follows.`
    */
   private trackToolUseFromAssistant(
     message: SDKAssistantMessage,
-    agent: 'arbiter' | 'orchestrator'
+    agent: 'arbiter' | 'orchestrator',
   ): void {
     const content = message.message.content;
     if (!Array.isArray(content)) return;
@@ -1482,7 +1457,10 @@ Take your time. This phase determines everything that follows.`
         const toolName = toolBlock.name;
 
         // Log tool use for this agent
-        const speaker = agent === 'arbiter' ? 'Arbiter' : `Conjuring ${toRoman(this.state.currentOrchestrator?.number ?? 1)}`;
+        const speaker =
+          agent === 'arbiter'
+            ? 'Arbiter'
+            : `Conjuring ${toRoman(this.state.currentOrchestrator?.number ?? 1)}`;
         this.callbacks.onDebugLog?.({
           type: 'tool',
           speaker,

@@ -11,7 +11,7 @@ import { playSfx } from '../../sound.js';
 const term = termKit.terminal;
 
 // ANSI codes
-const BOLD = '\x1b[1m';
+const _BOLD = '\x1b[1m';
 const DIM = '\x1b[2m';
 const RESET = '\x1b[0m';
 
@@ -21,14 +21,14 @@ const FIRE_COLORS = [
   '\x1b[93;1m', // bright yellow
   '\x1b[93;1m', // bright yellow
   '\x1b[33;1m', // yellow
-  '\x1b[33m',   // dark yellow
+  '\x1b[33m', // dark yellow
   '\x1b[38;5;208m', // orange
   '\x1b[38;5;208m', // orange
   '\x1b[38;5;202m', // dark orange
-  '\x1b[91m',   // bright red
-  '\x1b[91m',   // bright red
-  '\x1b[31m',   // red
-  '\x1b[31m',   // red
+  '\x1b[91m', // bright red
+  '\x1b[91m', // bright red
+  '\x1b[31m', // red
+  '\x1b[31m', // red
   '\x1b[38;5;124m', // dark red
   '\x1b[38;5;124m', // dark red
 ];
@@ -73,10 +73,10 @@ export async function showTitleScreen(): Promise<void> {
     // Get terminal dimensions
     let width = 180;
     let height = 50;
-    if (typeof term.width === 'number' && isFinite(term.width) && term.width > 0) {
+    if (typeof term.width === 'number' && Number.isFinite(term.width) && term.width > 0) {
       width = term.width;
     }
-    if (typeof term.height === 'number' && isFinite(term.height) && term.height > 0) {
+    if (typeof term.height === 'number' && Number.isFinite(term.height) && term.height > 0) {
       height = term.height;
     }
 
@@ -103,7 +103,7 @@ export async function showTitleScreen(): Promise<void> {
         const diagonal = row * rowWeight + col;
         const colorIdx = Math.min(
           Math.floor((diagonal / maxDiagonal) * FIRE_COLORS.length),
-          FIRE_COLORS.length - 1
+          FIRE_COLORS.length - 1,
         );
 
         // Only add color code when it changes

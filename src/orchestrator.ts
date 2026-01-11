@@ -2,12 +2,12 @@
 // Orchestrators coordinate work under the direction of the Arbiter
 
 import type {
-  SDKUserMessage,
   HookCallback,
   HookCallbackMatcher,
-  PostToolUseHookInput,
   HookEvent,
-} from "@anthropic-ai/claude-agent-sdk";
+  PostToolUseHookInput,
+  SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
 
 /**
  * The Orchestrator's system prompt - defines its role and operating pattern
@@ -191,7 +191,7 @@ export type OrchestratorCallbacks = {
  */
 export function createOrchestratorHooks(
   callbacks: OrchestratorCallbacks,
-  getContextPercent: (sessionId: string) => number
+  getContextPercent: (sessionId: string) => number,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
   const postToolUseHook: HookCallback = async (input, _toolUseId, _options) => {
     const hookInput = input as PostToolUseHookInput;
@@ -211,7 +211,7 @@ export function createOrchestratorHooks(
         hookSpecificOutput: {
           hookEventName: 'PostToolUse' as const,
           additionalContext:
-            "CONTEXT CRITICAL. Cease new work. Report your progress and remaining tasks to the Arbiter immediately.",
+            'CONTEXT CRITICAL. Cease new work. Report your progress and remaining tasks to the Arbiter immediately.',
         },
       };
     } else if (pct > 70) {
@@ -219,7 +219,7 @@ export function createOrchestratorHooks(
         hookSpecificOutput: {
           hookEventName: 'PostToolUse' as const,
           additionalContext:
-            "Context thins. Begin concluding your current thread. Prepare to hand off.",
+            'Context thins. Begin concluding your current thread. Prepare to hand off.',
         },
       };
     }
@@ -249,13 +249,13 @@ export type SDKInputMessage = SDKUserMessage;
  * @yields A user message in SDK format
  */
 export async function* createOrchestratorMessageStream(
-  content: string
+  content: string,
 ): AsyncGenerator<SDKInputMessage> {
   const message: SDKUserMessage = {
-    type: "user",
-    session_id: "", // Will be populated by the SDK
+    type: 'user',
+    session_id: '', // Will be populated by the SDK
     message: {
-      role: "user",
+      role: 'user',
       content: content,
     },
     parent_tool_use_id: null,

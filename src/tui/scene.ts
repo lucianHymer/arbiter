@@ -6,20 +6,16 @@
  */
 
 import {
-  Tileset,
-  RGB,
-  TILE,
-  TILE_SIZE,
   CHAR_HEIGHT,
-  RESET,
-  loadTileset,
-  extractTile,
-  compositeTiles,
-  renderTile,
-  mirrorTile,
-  extractQuarterTile,
   compositeQuarterTile,
-  QuarterPosition,
+  compositeTiles,
+  extractQuarterTile,
+  extractTile,
+  mirrorTile,
+  type RGB,
+  renderTile,
+  TILE,
+  type Tileset,
 } from './tileset.js';
 
 // ============================================================================
@@ -113,7 +109,7 @@ function getTileRender(
   tileset: Tileset,
   grassPixels: RGB[][],
   tileIndex: number,
-  mirrored: boolean = false
+  mirrored: boolean = false,
 ): string[] {
   const key = getCacheKey(tileIndex, mirrored);
   if (tileCache.has(key)) {
@@ -184,7 +180,15 @@ export function createInitialSceneState(): SceneState {
  * - Spellbook appears to the left of arbiter when at position 2
  */
 export function createScene(state: SceneState): TileSpec[][] {
-  const { arbiterPos, demonCount, selectedCharacter, humanCol, bubbleVisible, showSpellbook, scrollVisible } = state;
+  const {
+    arbiterPos,
+    demonCount,
+    selectedCharacter,
+    humanCol,
+    bubbleVisible,
+    showSpellbook,
+    scrollVisible,
+  } = state;
   // arbiterPos -1 means off-screen (not visible)
   const arbiterVisible = arbiterPos >= 0;
 
@@ -196,9 +200,18 @@ export function createScene(state: SceneState): TileSpec[][] {
   let arbiterRow = 2;
   if (arbiterVisible) {
     switch (arbiterPos) {
-      case 0: arbiterCol = 3; arbiterRow = 2; break;
-      case 1: arbiterCol = 4; arbiterRow = 2; break;
-      case 2: arbiterCol = 4; arbiterRow = 3; break;
+      case 0:
+        arbiterCol = 3;
+        arbiterRow = 2;
+        break;
+      case 1:
+        arbiterCol = 4;
+        arbiterRow = 2;
+        break;
+      case 2:
+        arbiterCol = 4;
+        arbiterRow = 3;
+        break;
     }
   }
 
@@ -285,7 +298,7 @@ export function createScene(state: SceneState): TileSpec[][] {
  */
 function getChatBubblePosition(
   state: SceneState,
-  target: 'human' | 'arbiter' | 'conjuring'
+  target: 'human' | 'arbiter' | 'conjuring',
 ): { row: number; col: number } {
   switch (target) {
     case 'human':
@@ -293,10 +306,14 @@ function getChatBubblePosition(
     case 'arbiter': {
       const pos = state.arbiterPos;
       switch (pos) {
-        case 0: return { row: 2, col: 3 };  // By scroll
-        case 1: return { row: 2, col: 4 };  // By cauldron
-        case 2: return { row: 3, col: 4 };  // By fire
-        default: return { row: 2, col: 3 };
+        case 0:
+          return { row: 2, col: 3 }; // By scroll
+        case 1:
+          return { row: 2, col: 4 }; // By cauldron
+        case 2:
+          return { row: 3, col: 4 }; // By fire
+        default:
+          return { row: 2, col: 3 };
       }
     }
     case 'conjuring':
@@ -345,7 +362,7 @@ export function renderScene(
   tileset: Tileset,
   scene: TileSpec[][],
   activeHops: Map<string, HopState> = new Map(),
-  sceneState?: SceneState
+  sceneState?: SceneState,
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);

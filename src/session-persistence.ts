@@ -1,11 +1,11 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 export interface PersistedSession {
   arbiterSessionId: string;
   orchestratorSessionId: string | null;
   orchestratorNumber: number | null;
-  savedAt: string;  // ISO timestamp
+  savedAt: string; // ISO timestamp
 }
 
 const SESSION_FILE = '.claude/.arbiter-session.json';
@@ -17,7 +17,7 @@ function getSessionFilePath(): string {
 export function saveSession(
   arbiterSessionId: string,
   orchestratorSessionId: string | null,
-  orchestratorNumber: number | null
+  orchestratorNumber: number | null,
 ): void {
   try {
     const sessionData: PersistedSession = {

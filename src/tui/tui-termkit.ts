@@ -5,35 +5,28 @@
  * that uses minimal redraws for flicker-free animation and input handling.
  */
 
-import termKit from 'terminal-kit';
-import * as fs from 'fs';
-import * as path from 'path';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { Fzf } from 'fzf';
-import {
-  Tileset,
-  TILE,
-  TILE_SIZE,
-  CHAR_HEIGHT,
-  RESET,
-  loadTileset,
-  extractTile,
-  compositeTiles,
-  renderTile,
-  RGB,
-} from './tileset.js';
-import {
-  SceneState,
-  HopState,
-  TileSpec,
-  createInitialSceneState,
-  createScene,
-  renderScene,
-} from './scene.js';
-import type { RouterCallbacks, DebugLogEntry } from '../router.js';
+import termKit from 'terminal-kit';
+import type { DebugLogEntry, RouterCallbacks } from '../router.js';
+import { playSfx } from '../sound.js';
 import type { AppState } from '../state.js';
 import { toRoman } from '../state.js';
-import type { WaitingState, Message, Speaker } from './types.js';
-import { playSfx } from '../sound.js';
+import { createInitialSceneState, createScene, renderScene, type SceneState } from './scene.js';
+import {
+  CHAR_HEIGHT,
+  compositeTiles,
+  extractTile,
+  loadTileset,
+  RESET,
+  type RGB,
+  renderTile,
+  TILE,
+  TILE_SIZE,
+  type Tileset,
+} from './tileset.js';
+import type { Message, Speaker, WaitingState } from './types.js';
 
 // ============================================================================
 // Types
@@ -78,7 +71,7 @@ interface TUIState {
 
   // Input state
   inputBuffer: string;
-  cursorPos: number;  // Cursor position (index into inputBuffer)
+  cursorPos: number; // Cursor position (index into inputBuffer)
   mode: 'NORMAL' | 'INSERT';
 
   // Status info
@@ -86,12 +79,12 @@ interface TUIState {
   orchestratorContextPercent: number | null;
   currentTool: string | null;
   toolCallCount: number;
-  lastToolTime: number;  // timestamp when tool was last set
+  lastToolTime: number; // timestamp when tool was last set
 
   // Tool indicator (shown between messages)
-  recentTools: string[];  // Last 2 tools used
-  toolCountSinceLastMessage: number;  // Total tool calls since last chat message
-  showToolIndicator: boolean;  // Whether to show the tool indicator
+  recentTools: string[]; // Last 2 tools used
+  toolCountSinceLastMessage: number; // Total tool calls since last chat message
+  showToolIndicator: boolean; // Whether to show the tool indicator
 
   // Animation state
   animationFrame: number;
@@ -115,10 +108,8 @@ interface TUIState {
   requirementsSearchQuery: string;
   requirementsSelectedIndex: number;
   requirementsCursorPos: number;
-  requirementsTilesDrawn: boolean;  // Flag to avoid redrawing tiles on every keystroke
-
-  // Drawing toggle - disabled during suspend/detach to prevent spazzy output
   drawingEnabled: boolean;
+  requirementsTilesDrawn: boolean; // Flag to avoid redrawing tiles on every keystroke
 }
 
 /**
@@ -151,7 +142,7 @@ const TILE_AREA_WIDTH = SCENE_WIDTH * TILE_SIZE; // 112 chars
 const TILE_AREA_HEIGHT = SCENE_HEIGHT * CHAR_HEIGHT; // 48 rows
 
 // Filler tile cache (for grass/trees above and below scene)
-let fillerRowCache: Map<string, string[]> = new Map();
+const fillerRowCache: Map<string, string[]> = new Map();
 
 // Animation
 const ANIMATION_INTERVAL = 250; // ms
@@ -195,7 +186,10 @@ const term = termKit.terminal;
  * @param width Available width for text (excluding prompt)
  * @returns Number of lines needed (displayLines capped at MAX_INPUT_LINES, totalLines is actual count)
  */
-function calculateInputLines(text: string, width: number): { displayLines: number; totalLines: number } {
+function calculateInputLines(
+  text: string,
+  width: number,
+): { displayLines: number; totalLines: number } {
   if (!text || width <= 0) return { displayLines: 1, totalLines: 1 };
 
   // Split by actual newlines first
@@ -213,7 +207,7 @@ function calculateInputLines(text: string, width: number): { displayLines: numbe
 
   return {
     displayLines: Math.min(Math.max(1, totalLines), MAX_INPUT_LINES),
-    totalLines: Math.max(1, totalLines)
+    totalLines: Math.max(1, totalLines),
   };
 }
 
@@ -221,10 +215,10 @@ function getLayout(inputText: string = '') {
   let width = 180;
   let height = 50;
 
-  if (typeof term.width === 'number' && isFinite(term.width) && term.width > 0) {
+  if (typeof term.width === 'number' && Number.isFinite(term.width) && term.width > 0) {
     width = term.width;
   }
-  if (typeof term.height === 'number' && isFinite(term.height) && term.height > 0) {
+  if (typeof term.height === 'number' && Number.isFinite(term.height) && term.height > 0) {
     height = term.height;
   }
 
@@ -243,9 +237,9 @@ function getLayout(inputText: string = '') {
   const { displayLines: inputLines } = calculateInputLines(inputText, inputTextWidth);
 
   // Input area at bottom, status bar above it, context bar above that, chat fills remaining space
-  const inputY = height - inputLines + 1;  // +1 because 1-indexed
+  const inputY = height - inputLines + 1; // +1 because 1-indexed
   const statusY = inputY - 1;
-  const contextY = statusY - 1;  // Context bar above status
+  const contextY = statusY - 1; // Context bar above status
   const chatAreaY = 1;
   const chatAreaHeight = contextY - 1; // Chat goes up to context bar
 
@@ -357,7 +351,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   let animationInterval: NodeJS.Timeout | null = null;
   let isRunning = false;
   let inLogViewer = false; // Track when log viewer is open
-  let inRequirementsOverlay = false; // Track when requirements overlay is open
+  let _inRequirementsOverlay = false; // Track when requirements overlay is open
   let entranceComplete = false; // Track if entrance animation is done
   let pendingArbiterMessage: string | null = null; // Message waiting for entrance to complete
   let arbiterWalkInterval: NodeJS.Timeout | null = null; // For walk animations
@@ -441,7 +435,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         const fillerLines = getFillerRow(state.tileset, tileRow);
         // Draw from bottom of this filler tile upward
         for (let charRow = CHAR_HEIGHT - 1; charRow >= 0; charRow--) {
-          const screenY = layout.tileArea.y - 1 - (tileRow * CHAR_HEIGHT) - (CHAR_HEIGHT - 1 - charRow);
+          const screenY =
+            layout.tileArea.y - 1 - tileRow * CHAR_HEIGHT - (CHAR_HEIGHT - 1 - charRow);
           if (screenY >= 1) {
             term.moveTo(layout.tileArea.x, screenY);
             process.stdout.write(fillerLines[charRow] + RESET);
@@ -458,7 +453,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       state.tileset,
       scene,
       state.sceneState.activeHops,
-      state.sceneState
+      state.sceneState,
     );
 
     // Split by lines and write each line
@@ -475,7 +470,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       for (let tileRow = 0; tileRow < fillerTileRowsBelow; tileRow++) {
         const fillerLines = getFillerRow(state.tileset, tileRow + 100); // Offset for different pattern
         for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
-          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + (tileRow * CHAR_HEIGHT) + charRow;
+          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + tileRow * CHAR_HEIGHT + charRow;
           if (screenY <= layout.height) {
             term.moveTo(layout.tileArea.x, screenY);
             process.stdout.write(fillerLines[charRow] + RESET);
@@ -518,7 +513,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       const dotPhase = state.blinkCycle % 4;
       const dots = dotPhase < 3 ? '.'.repeat(dotPhase + 1) : '';
       const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
-      renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
+      renderedLines.push({
+        text: `${waiting} is working${dots}`,
+        color: `\x1b[2m${indicatorColor}`,
+      });
     } else {
       renderedLines.push({ text: '', color: COLORS.reset });
     }
@@ -551,14 +549,21 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const waitingChanged = state.waitingFor !== tracker.lastChatWaitingFor;
     // Only track blink cycle changes when waiting (for slower blinking effect)
     const blinkChanged =
-      state.waitingFor !== 'none' &&
-      state.blinkCycle !== tracker.lastChatAnimFrame;
+      state.waitingFor !== 'none' && state.blinkCycle !== tracker.lastChatAnimFrame;
     // Track tool indicator changes
     const toolIndicatorChanged =
       state.showToolIndicator !== tracker.lastShowToolIndicator ||
       state.toolCountSinceLastMessage !== tracker.lastToolCount;
 
-    if (!force && !scrollChanged && !messagesChanged && !waitingChanged && !blinkChanged && !toolIndicatorChanged) return;
+    if (
+      !force &&
+      !scrollChanged &&
+      !messagesChanged &&
+      !waitingChanged &&
+      !blinkChanged &&
+      !toolIndicatorChanged
+    )
+      return;
 
     tracker.lastScrollOffset = state.scrollOffset;
     tracker.lastMessageCount = state.messages.length;
@@ -685,10 +690,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (state.mode === 'INSERT') {
       statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      statusLine += '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
+      statusLine +=
+        '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
     } else {
       statusLine += '\x1b[48;2;130;44;19m\x1b[97m SCROLL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      statusLine += '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
+      statusLine +=
+        '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
     }
 
     term.moveTo(statusX, statusY);
@@ -703,9 +710,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const layout = getLayout(state.inputBuffer);
     const inputHeight = layout.inputArea.height;
 
-    const inputChanged = state.inputBuffer !== tracker.lastInputBuffer ||
-                         state.mode !== tracker.lastMode ||
-                         state.cursorPos !== tracker.lastCursorPos;
+    const inputChanged =
+      state.inputBuffer !== tracker.lastInputBuffer ||
+      state.mode !== tracker.lastMode ||
+      state.cursorPos !== tracker.lastCursorPos;
     const heightChanged = inputHeight !== tracker.lastInputHeight;
 
     if (!force && !inputChanged && !heightChanged) return;
@@ -780,7 +788,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
             cursorLine = lineIndex;
             cursorCol = 0;
             found = true;
-            break outer;
+            break;
           }
           lineIndex++;
         } else {
@@ -815,7 +823,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
             cursorLine = lineIndex;
             cursorCol = 0;
             found = true;
-            break outer;
+            break;
           }
           charIndex++; // For the \n
         }
@@ -953,18 +961,22 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     switch (state.requirementsOverlay) {
       case 'prompt':
-        panelLines = renderMessagePanel(state.tileset, [
-          '\x1b[97mDo you bring a Scroll of Requirements?\x1b[0m',
-          '\x1b[90m(a detailed markdown file describing your task)\x1b[0m',
-          '',
-          '\x1b[90mThe Arbiter rewards those who come prepared.\x1b[0m',
-          '\x1b[90mScrolls contain context, specs, and acceptance criteria.\x1b[0m',
-          '',
-          '\x1b[92m[Y]\x1b[0m Yes, I have a .md file    \x1b[91m[N]\x1b[0m No, I\'ll wing it',
-        ], panelWidth);
+        panelLines = renderMessagePanel(
+          state.tileset,
+          [
+            '\x1b[97mDo you bring a Scroll of Requirements?\x1b[0m',
+            '\x1b[90m(a detailed markdown file describing your task)\x1b[0m',
+            '',
+            '\x1b[90mThe Arbiter rewards those who come prepared.\x1b[0m',
+            '\x1b[90mScrolls contain context, specs, and acceptance criteria.\x1b[0m',
+            '',
+            "\x1b[92m[Y]\x1b[0m Yes, I have a .md file    \x1b[91m[N]\x1b[0m No, I'll wing it",
+          ],
+          panelWidth,
+        );
         break;
 
-      case 'picker':
+      case 'picker': {
         // Build file list display with cursor at correct position
         const beforeCursor = state.requirementsSearchQuery.slice(0, state.requirementsCursorPos);
         const afterCursor = state.requirementsSearchQuery.slice(state.requirementsCursorPos);
@@ -979,9 +991,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         ];
 
         // Show filtered files (max 16 for 3-tile tall panel)
-        const files = state.requirementsFilteredFiles.length > 0
-          ? state.requirementsFilteredFiles
-          : state.requirementsFiles;
+        const files =
+          state.requirementsFilteredFiles.length > 0
+            ? state.requirementsFilteredFiles
+            : state.requirementsFiles;
         const maxVisible = 16;
         const startIdx = Math.max(0, state.requirementsSelectedIndex - Math.floor(maxVisible / 2));
         const visibleFiles = files.slice(startIdx, startIdx + maxVisible);
@@ -1004,16 +1017,21 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         panelWidth = 7;
         panelLines = renderMessagePanel(state.tileset, displayLines, panelWidth, 3);
         break;
+      }
 
       case 'rat-transform':
-        panelLines = renderMessagePanel(state.tileset, [
-          '\x1b[91mYou have been transformed into a rat.\x1b[0m',
-          '\x1b[90m(the Arbiter does not suffer the unprepared)\x1b[0m',
-          '',
-          '\x1b[90mCome back with a requirements.md or similar.\x1b[0m',
-          '',
-          '\x1b[90mPress any key to scurry away...\x1b[0m',
-        ], 5);
+        panelLines = renderMessagePanel(
+          state.tileset,
+          [
+            '\x1b[91mYou have been transformed into a rat.\x1b[0m',
+            '\x1b[90m(the Arbiter does not suffer the unprepared)\x1b[0m',
+            '',
+            '\x1b[90mCome back with a requirements.md or similar.\x1b[0m',
+            '',
+            '\x1b[90mPress any key to scurry away...\x1b[0m',
+          ],
+          5,
+        );
         break;
 
       default:
@@ -1022,8 +1040,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Position the panel within the SCENE area only (not whole screen)
     // Scene dimensions: 7 tiles x 6 tiles = 112 chars x 48 rows
-    const sceneWidthChars = 7 * 16;  // 112
-    const sceneHeightChars = 6 * 8;  // 48
+    const sceneWidthChars = 7 * 16; // 112
+    const sceneHeightChars = 6 * 8; // 48
 
     const panelWidthChars = panelWidth * 16;
     const panelHeight = panelLines.length;
@@ -1035,8 +1053,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     let panelY: number;
     let finalPanelX = panelX;
     if (state.requirementsOverlay === 'rat-transform') {
-      panelY = sceneHeightChars - panelHeight + 4;  // Lower position so arbiter at row 3 is visible
-      finalPanelX = panelX + 16;  // One tile to the right
+      panelY = sceneHeightChars - panelHeight + 4; // Lower position so arbiter at row 3 is visible
+      finalPanelX = panelX + 16; // One tile to the right
     } else {
       panelY = Math.max(1, Math.floor((sceneHeightChars - panelHeight) / 2));
     }
@@ -1090,7 +1108,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       for (let tileRow = 0; tileRow < fillerTileRowsAbove; tileRow++) {
         const fillerLines = getFillerRow(state.tileset, tileRow);
         for (let charRow = CHAR_HEIGHT - 1; charRow >= 0; charRow--) {
-          const screenY = layout.tileArea.y - 1 - (tileRow * CHAR_HEIGHT) - (CHAR_HEIGHT - 1 - charRow);
+          const screenY =
+            layout.tileArea.y - 1 - tileRow * CHAR_HEIGHT - (CHAR_HEIGHT - 1 - charRow);
           if (screenY >= 1) {
             term.moveTo(layout.tileArea.x, screenY);
             process.stdout.write(fillerLines[charRow] + RESET);
@@ -1107,7 +1126,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       state.tileset,
       scene,
       state.sceneState.activeHops,
-      state.sceneState
+      state.sceneState,
     );
 
     // Split by lines and write each line
@@ -1124,7 +1143,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       for (let tileRow = 0; tileRow < fillerTileRowsBelow; tileRow++) {
         const fillerLines = getFillerRow(state.tileset, tileRow + 100);
         for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
-          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + (tileRow * CHAR_HEIGHT) + charRow;
+          const screenY = layout.tileArea.y + TILE_AREA_HEIGHT + tileRow * CHAR_HEIGHT + charRow;
           if (screenY <= layout.height) {
             term.moveTo(layout.tileArea.x, screenY);
             process.stdout.write(fillerLines[charRow] + RESET);
@@ -1144,22 +1163,22 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           // Switch to file picker
           loadFilesForPicker();
           state.requirementsOverlay = 'picker';
-          inRequirementsOverlay = true;
+          _inRequirementsOverlay = true;
           drawRequirementsOverlay();
         } else if (key === 'n' || key === 'N') {
           // Rat transformation
           playSfx('magic');
           // First show smoke
           state.sceneState.selectedCharacter = TILE.SMOKE; // 90
-          state.requirementsTilesDrawn = false;  // Reset so tiles get redrawn with smoke
+          state.requirementsTilesDrawn = false; // Reset so tiles get redrawn with smoke
           drawTilesInternal();
-          state.requirementsTilesDrawn = true;  // Mark as drawn
+          state.requirementsTilesDrawn = true; // Mark as drawn
 
           // After 1500ms (3x longer smoke animation), show rat
           setTimeout(() => {
             state.sceneState.selectedCharacter = 210; // Rat tile
             state.requirementsOverlay = 'rat-transform';
-            state.requirementsTilesDrawn = false;  // Reset so tiles get redrawn with rat
+            state.requirementsTilesDrawn = false; // Reset so tiles get redrawn with rat
             drawRequirementsOverlay();
           }, 1500);
         }
@@ -1170,10 +1189,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           state.requirementsSelectedIndex = Math.max(0, state.requirementsSelectedIndex - 1);
           drawPickerList();
         } else if (key === 'DOWN') {
-          const files = state.requirementsFilteredFiles.length > 0
-            ? state.requirementsFilteredFiles
-            : state.requirementsFiles;
-          state.requirementsSelectedIndex = Math.min(files.length - 1, state.requirementsSelectedIndex + 1);
+          const files =
+            state.requirementsFilteredFiles.length > 0
+              ? state.requirementsFilteredFiles
+              : state.requirementsFiles;
+          state.requirementsSelectedIndex = Math.min(
+            files.length - 1,
+            state.requirementsSelectedIndex + 1,
+          );
           drawPickerList();
         } else if (key === 'LEFT') {
           // Move cursor left in search query
@@ -1181,13 +1204,17 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           drawPickerInput();
         } else if (key === 'RIGHT') {
           // Move cursor right in search query
-          state.requirementsCursorPos = Math.min(state.requirementsSearchQuery.length, state.requirementsCursorPos + 1);
+          state.requirementsCursorPos = Math.min(
+            state.requirementsSearchQuery.length,
+            state.requirementsCursorPos + 1,
+          );
           drawPickerInput();
         } else if (key === 'ENTER') {
           // Select file
-          const files = state.requirementsFilteredFiles.length > 0
-            ? state.requirementsFilteredFiles
-            : state.requirementsFiles;
+          const files =
+            state.requirementsFilteredFiles.length > 0
+              ? state.requirementsFilteredFiles
+              : state.requirementsFiles;
           if (files.length > 0) {
             const selectedFile = files[state.requirementsSelectedIndex];
             selectRequirementsFile(selectedFile);
@@ -1198,7 +1225,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           state.requirementsSearchQuery = '';
           state.requirementsSelectedIndex = 0;
           state.requirementsCursorPos = 0;
-          state.requirementsTilesDrawn = false;  // Force scene redraw to clear larger picker
+          state.requirementsTilesDrawn = false; // Force scene redraw to clear larger picker
           drawRequirementsOverlay();
         } else if (key === 'BACKSPACE') {
           // Delete char before cursor
@@ -1210,7 +1237,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
             filterFiles();
             drawPickerContent();
           }
-        } else if (key.length === 1 && key.match(/[a-zA-Z0-9._\-\/]/)) {
+        } else if (key.length === 1 && key.match(/[a-zA-Z0-9._\-/]/)) {
           // Insert char at cursor position
           state.requirementsSearchQuery =
             state.requirementsSearchQuery.slice(0, state.requirementsCursorPos) +
@@ -1286,8 +1313,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     appState.requirementsPath = filePath;
     state.sceneState.scrollVisible = true;
     state.requirementsOverlay = 'none';
-    state.requirementsTilesDrawn = false;  // Reset for next time overlay is shown
-    inRequirementsOverlay = false;
+    state.requirementsTilesDrawn = false; // Reset for next time overlay is shown
+    _inRequirementsOverlay = false;
     fullDraw();
 
     // Signal that requirements are ready (router can start now)
@@ -1361,7 +1388,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    *
    * @internal Used by renderMessagePanel() for heightTiles > 2
    */
-  function createMiddleRowBorders(tileset: Tileset, charRow: number): { left: string; fill: string; right: string } {
+  function createMiddleRowBorders(
+    tileset: Tileset,
+    charRow: number,
+  ): { left: string; fill: string; right: string } {
     // Use the BOTTOM HALF of the top corner tiles for middle rows
     // This gives us just the vertical border without horizontal border lines
     const topLeftTile = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
@@ -1371,7 +1401,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Bottom half of tile is pixel rows 8-15 (4 char rows worth)
     // Use modulo to repeat this pattern for all 8 char rows
     const actualCharRow = charRow % 4;
-    const pixelRowTop = 8 + (actualCharRow * 2);  // Start from row 8 (bottom half)
+    const pixelRowTop = 8 + actualCharRow * 2; // Start from row 8 (bottom half)
     const pixelRowBot = pixelRowTop + 1;
 
     // Render left border (full 16 chars from bottom half of top-left tile)
@@ -1480,7 +1510,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * ];
    * const panel = renderMessagePanel(tileset, coloredLines, 5, 2);
    */
-  function renderMessagePanel(tileset: Tileset, textLines: string[], widthTiles: number = 5, heightTiles: number = 2): string[] {
+  function renderMessagePanel(
+    tileset: Tileset,
+    textLines: string[],
+    widthTiles: number = 5,
+    heightTiles: number = 2,
+  ): string[] {
     const topLeft = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
     const topRight = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
     const bottomLeft = extractTile(tileset, DIALOGUE_TILES.BOTTOM_LEFT);
@@ -1562,8 +1597,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     } else {
       // For 3+ tile panels: text can go in rows 2 through boxHeight-3
       // This allows text in top tile (rows 2-7), middle tiles (all rows), and bottom tile (rows 0-5)
-      interiorStartRow = 2;  // Leave 2 rows for top border
-      interiorEndRow = boxHeight - 3;  // Leave 2 rows for bottom border
+      interiorStartRow = 2; // Leave 2 rows for top border
+      interiorEndRow = boxHeight - 3; // Leave 2 rows for bottom border
     }
 
     const interiorHeight = interiorEndRow - interiorStartRow + 1;
@@ -1572,7 +1607,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     for (let i = 0; i < textLines.length; i++) {
       const boxLineIndex = textStartOffset + i;
       // Only write text to rows within the interior area
-      if (boxLineIndex >= interiorStartRow && boxLineIndex <= interiorEndRow && boxLineIndex < boxLines.length) {
+      if (
+        boxLineIndex >= interiorStartRow &&
+        boxLineIndex <= interiorEndRow &&
+        boxLineIndex < boxLines.length
+      ) {
         let line = textLines[i];
         let visibleLength = stripAnsi(line).length;
 
@@ -1589,7 +1628,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
             const newVisibleLen = stripAnsi(truncated).length;
             truncatedVisible = newVisibleLen;
           }
-          line = truncated + '...';
+          line = `${truncated}...`;
           visibleLength = stripAnsi(line).length;
         }
 
@@ -1745,7 +1784,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * @param lineWidth The width of each line for wrapping
    * @returns { line: number, col: number, totalLines: number }
    */
-  function getCursorLineCol(text: string, cursorPos: number, lineWidth: number): { line: number; col: number; totalLines: number } {
+  function getCursorLineCol(
+    text: string,
+    cursorPos: number,
+    lineWidth: number,
+  ): { line: number; col: number; totalLines: number } {
     if (!text || lineWidth <= 0) {
       return { line: 0, col: 0, totalLines: 1 };
     }
@@ -1770,11 +1813,19 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
           const lineEnd = charIndex + Math.min(i + lineWidth, para.length);
 
           if (cursorPos >= lineStart && cursorPos < lineEnd) {
-            return { line: lineIndex, col: cursorPos - lineStart, totalLines: countTotalLines(text, lineWidth) };
+            return {
+              line: lineIndex,
+              col: cursorPos - lineStart,
+              totalLines: countTotalLines(text, lineWidth),
+            };
           }
           // Cursor at end of this wrapped segment (and it's the last segment of paragraph)
           if (cursorPos === lineEnd && i + lineWidth >= para.length) {
-            return { line: lineIndex, col: cursorPos - lineStart, totalLines: countTotalLines(text, lineWidth) };
+            return {
+              line: lineIndex,
+              col: cursorPos - lineStart,
+              totalLines: countTotalLines(text, lineWidth),
+            };
           }
           lineIndex++;
         }
@@ -1792,7 +1843,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }
 
     // Cursor at very end
-    return { line: lineIndex - 1, col: text.length - charIndex + (paragraphs[paragraphs.length - 1]?.length || 0), totalLines: countTotalLines(text, lineWidth) };
+    return {
+      line: lineIndex - 1,
+      col: text.length - charIndex + (paragraphs[paragraphs.length - 1]?.length || 0),
+      totalLines: countTotalLines(text, lineWidth),
+    };
   }
 
   /**
@@ -1816,7 +1871,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * @param lineWidth The width of each line for wrapping
    * @returns The cursor position (index into text)
    */
-  function lineToCursorPos(text: string, targetLine: number, targetCol: number, lineWidth: number): number {
+  function lineToCursorPos(
+    text: string,
+    targetLine: number,
+    targetCol: number,
+    lineWidth: number,
+  ): number {
     if (!text || lineWidth <= 0) return 0;
 
     const paragraphs = text.split('\n');
@@ -1935,7 +1995,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'UP': {
         const layout = getLayout(state.inputBuffer);
         const textWidth = layout.inputArea.width - 3; // Match drawInput calculation
-        const { line, col, totalLines } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
+        const { line, col } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
 
         if (line > 0) {
           // Move to previous line, same column (or end if shorter)
@@ -1948,7 +2008,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'DOWN': {
         const layout = getLayout(state.inputBuffer);
         const textWidth = layout.inputArea.width - 3;
-        const { line, col, totalLines } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
+        const { line, col, totalLines } = getCursorLineCol(
+          state.inputBuffer,
+          state.cursorPos,
+          textWidth,
+        );
 
         if (line < totalLines - 1) {
           // Move to next line, same column (or end if shorter)
@@ -1976,7 +2040,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   function handleNormalModeKey(key: string) {
     switch (key) {
       case 'i':
-      case 'ENTER':
+      case 'ENTER': {
         state.mode = 'INSERT';
         // Auto-scroll to bottom when entering insert mode
         const layoutIns = getLayout(state.inputBuffer);
@@ -1986,6 +2050,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawStatus(true);
         drawInput(true);
         break;
+      }
 
       case 'j':
       case 'DOWN':
@@ -2007,13 +2072,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         drawChat();
         break;
 
-      case 'G':
+      case 'G': {
         // Scroll to bottom using single source of truth
         const layoutG = getLayout(state.inputBuffer);
         const renderedLinesG = getRenderedChatLines(layoutG.chatArea.width);
         state.scrollOffset = Math.max(0, renderedLinesG.length - layoutG.chatArea.height);
         drawChat();
         break;
+      }
 
       case 'b':
       case 'CTRL_B': {
@@ -2082,7 +2148,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     let logContent: string;
     try {
       logContent = fs.readFileSync(DEBUG_LOG_PATH, 'utf-8');
-    } catch (err) {
+    } catch (_err) {
       inLogViewer = false;
       return;
     }
@@ -2097,7 +2163,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Header - green like INSERT mode
       term.moveTo(1, 1);
       process.stdout.write('\x1b[42;30m DEBUG LOG \x1b[0m');
-      process.stdout.write(`\x1b[2m (${logLines.length} lines, showing ${logScrollOffset + 1}-${Math.min(logScrollOffset + visibleLines, logLines.length)})\x1b[0m`);
+      process.stdout.write(
+        `\x1b[2m (${logLines.length} lines, showing ${logScrollOffset + 1}-${Math.min(logScrollOffset + visibleLines, logLines.length)})\x1b[0m`,
+      );
 
       // Log content
       for (let i = 0; i < visibleLines; i++) {
@@ -2107,13 +2175,15 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         if (lineIdx < logLines.length) {
           // Truncate long lines and display with default colors
           const line = logLines[lineIdx].substring(0, term.width - 1);
-          process.stdout.write('\x1b[0m' + line);
+          process.stdout.write(`\x1b[0m${line}`);
         }
       }
 
       // Footer - green like INSERT mode
       term.moveTo(1, term.height);
-      process.stdout.write('\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  ^C:quit  ^Z:suspend \x1b[0m');
+      process.stdout.write(
+        '\x1b[42;30m j/k:line  u/d:half  b/f:page  g/G:top/bottom  q:close  ^C:quit  ^Z:suspend \x1b[0m',
+      );
     }
 
     drawLogViewer();
@@ -2197,17 +2267,24 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   /**
    * Get the current position (row, col) of a character type
    */
-  function getCharacterPosition(target: 'human' | 'arbiter' | 'conjuring'): { row: number; col: number } {
+  function getCharacterPosition(target: 'human' | 'arbiter' | 'conjuring'): {
+    row: number;
+    col: number;
+  } {
     if (target === 'human') {
       return { row: 2, col: state.sceneState.humanCol };
     } else if (target === 'arbiter') {
       // Map arbiterPos to actual row/col
       const pos = state.sceneState.arbiterPos;
       switch (pos) {
-        case 0: return { row: 2, col: 3 };  // By scroll (final position)
-        case 1: return { row: 2, col: 4 };  // By cauldron
-        case 2: return { row: 3, col: 4 };  // By fire (starting position)
-        default: return { row: 2, col: 3 }; // fallback
+        case 0:
+          return { row: 2, col: 3 }; // By scroll (final position)
+        case 1:
+          return { row: 2, col: 4 }; // By cauldron
+        case 2:
+          return { row: 3, col: 4 }; // By fire (starting position)
+        default:
+          return { row: 2, col: 3 }; // fallback
       }
     } else {
       // conjuring = first demon at row 2, col 6
@@ -2340,10 +2417,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * - Pos 1: by cauldron (row 2, col 4)
    * - Pos 0: by scroll (row 2, col 3) - final position
    */
-  function animateArbiterWalk(
-    targetPos: -1 | 0 | 1 | 2,
-    onComplete?: () => void
-  ) {
+  function animateArbiterWalk(targetPos: -1 | 0 | 1 | 2, onComplete?: () => void) {
     // Clear any existing walk animation
     if (arbiterWalkInterval) {
       clearInterval(arbiterWalkInterval);
@@ -2393,7 +2467,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (summonState !== 'idle') return; // Already summoning or dismissing
 
     summonState = 'walking';
-    animateArbiterWalk(2, () => {  // Pos 2 = by fire (row 3, col 4)
+    animateArbiterWalk(2, () => {
+      // Pos 2 = by fire (row 3, col 4)
       // Walk complete - show spellbook after brief pause
       setTimeout(() => {
         state.sceneState.showSpellbook = true;
@@ -2541,8 +2616,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       if (needsRequirementsPrompt) {
         // Show requirements overlay BEFORE arbiter walks
         state.requirementsOverlay = 'prompt';
-        inRequirementsOverlay = true;  // Prevent animation interval from overwriting
-        loadFilesForPicker();  // Pre-load files
+        _inRequirementsOverlay = true; // Prevent animation interval from overwriting
+        loadFilesForPicker(); // Pre-load files
         drawRequirementsOverlay();
         // Arbiter will walk after user selects file (in selectRequirementsFile)
       } else {
@@ -2609,7 +2684,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.toolCountSinceLastMessage++;
         state.showToolIndicator = true;
         // Keep last 2 tools
-        if (state.recentTools.length === 0 || state.recentTools[state.recentTools.length - 1] !== tool) {
+        if (
+          state.recentTools.length === 0 ||
+          state.recentTools[state.recentTools.length - 1] !== tool
+        ) {
           state.recentTools.push(tool);
           if (state.recentTools.length > 2) {
             state.recentTools.shift();
@@ -2617,7 +2695,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         }
 
         drawContext();
-        drawChat();  // Also redraw chat for tool indicator
+        drawChat(); // Also redraw chat for tool indicator
       },
 
       onModeChange: (mode: AppState['mode']) => {
@@ -2672,7 +2750,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       onCrashCountUpdate: (count: number) => {
         state.crashCount = count;
-        drawContext(true);  // Force redraw
+        drawContext(true); // Force redraw
       },
 
       onDebugLog: (entry: DebugLogEntry) => {
@@ -2705,7 +2783,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
             fs.mkdirSync(dir, { recursive: true });
           }
           fs.appendFileSync(DEBUG_LOG_PATH, logLine);
-        } catch (err) {
+        } catch (_err) {
           // Silently ignore write errors
         }
       },
@@ -2777,7 +2855,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         fs.mkdirSync(dir, { recursive: true });
       }
       fs.writeFileSync(DEBUG_LOG_PATH, `=== Arbiter Session ${new Date().toISOString()} ===\n\n`);
-    } catch (err) {
+    } catch (_err) {
       // Ignore errors
     }
 
@@ -2824,7 +2902,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Raw stdin handler for Ctrl-\ (0x1c) - terminal-kit doesn't emit this as a key
     // This is used for dtach detachment
     process.stdin.on('data', (data: Buffer) => {
-      if (data.includes(0x1c)) {  // Ctrl-\ = ASCII 28 = 0x1c
+      if (data.includes(0x1c)) {
+        // Ctrl-\ = ASCII 28 = 0x1c
         // Disable drawing before detach (same as suspend)
         state.drawingEnabled = false;
         process.kill(process.pid, 'SIGQUIT');
@@ -2911,7 +2990,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Show crash count if any
     if (appState.crashCount > 0) {
-      console.log(`\n\x1b[33m⚠ Session had ${appState.crashCount} crash${appState.crashCount > 1 ? 'es' : ''} (recovered)\x1b[0m`);
+      console.log(
+        `\n\x1b[33m⚠ Session had ${appState.crashCount} crash${appState.crashCount > 1 ? 'es' : ''} (recovered)\x1b[0m`,
+      );
     }
 
     isRunning = false;

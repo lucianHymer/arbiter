@@ -71,7 +71,7 @@ export function updateOrchestratorContext(state: AppState, percent: number): voi
  */
 export function setCurrentOrchestrator(
   state: AppState,
-  orch: { id: string; sessionId: string; number: number }
+  orch: { id: string; sessionId: string; number: number },
 ): void {
   state.currentOrchestrator = {
     id: orch.id,
@@ -111,11 +111,7 @@ export function addMessage(state: AppState, speaker: string, text: string): void
 /**
  * Updates the current orchestrator's tool info
  */
-export function updateOrchestratorTool(
-  state: AppState,
-  tool: string | null,
-  count: number
-): void {
+export function updateOrchestratorTool(state: AppState, tool: string | null, count: number): void {
   if (state.currentOrchestrator) {
     state.currentOrchestrator.currentTool = tool;
     state.currentOrchestrator.toolCallCount = count;

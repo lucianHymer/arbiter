@@ -7,19 +7,19 @@
  */
 
 import termKit from 'terminal-kit';
+import { playSfx } from '../../sound.js';
 import {
-  Tileset,
+  CHAR_HEIGHT,
+  compositeTiles,
+  extractTile,
+  loadTileset,
+  RESET,
+  type RGB,
+  renderTile,
   TILE,
   TILE_SIZE,
-  CHAR_HEIGHT,
-  RESET,
-  loadTileset,
-  extractTile,
-  compositeTiles,
-  renderTile,
-  RGB,
+  type Tileset,
 } from '../tileset.js';
-import { playSfx } from '../../sound.js';
 
 const term = termKit.terminal;
 
@@ -193,7 +193,7 @@ function isOffScreen(x: number, y: number): boolean {
 /**
  * Check if position is the exit (no longer used - exit is now off-screen)
  */
-function isExit(x: number, y: number): boolean {
+function _isExit(_x: number, _y: number): boolean {
   // Exit is now when player walks off-screen to the right on path row
   // This function kept for compatibility but always returns false
   return false;
@@ -379,7 +379,7 @@ function renderForestScene(
   tileset: Tileset,
   characterTile: number,
   playerX: number,
-  playerY: number
+  playerY: number,
 ): string[] {
   const trailTile = extractTile(tileset, TILE.GRASS_SPARSE);
 
@@ -559,7 +559,7 @@ function renderDialogueBox(tileset: Tileset): string[] {
 }
 
 // Rat dialogue colors
-const COLOR_RAT = '\x1b[38;2;180;140;100m'; // Brown for rat
+const _COLOR_RAT = '\x1b[38;2;180;140;100m'; // Brown for rat
 const COLOR_RAT_EEK = '\x1b[38;2;255;200;100m'; // Yellow for eek
 
 /**
@@ -712,10 +712,10 @@ function renderDeathScene(tileset: Tileset): string[] {
  * @returns Promise<'success' | 'death'> - 'success' when player exits right after seeing sign, 'death' if they die
  */
 export async function showForestIntro(selectedCharacter: number): Promise<'success' | 'death'> {
-  return new Promise(async (resolve) => {
-    // Load tileset
-    const tileset = await loadTileset();
+  // Load tileset before entering the Promise
+  const tileset = await loadTileset();
 
+  return new Promise((resolve) => {
     // Initialize terminal
     term.fullscreen(true);
     term.hideCursor();
@@ -742,10 +742,10 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
     // Calculate centering offsets
     let width = 180;
     let height = 50;
-    if (typeof term.width === 'number' && isFinite(term.width) && term.width > 0) {
+    if (typeof term.width === 'number' && Number.isFinite(term.width) && term.width > 0) {
       width = term.width;
     }
-    if (typeof term.height === 'number' && isFinite(term.height) && term.height > 0) {
+    if (typeof term.height === 'number' && Number.isFinite(term.height) && term.height > 0) {
       height = term.height;
     }
 
@@ -795,7 +795,12 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         playSfx('quickNotice');
       }
 
-      const sceneLines = renderForestScene(tileset, selectedCharacter, state.playerX, state.playerY);
+      const sceneLines = renderForestScene(
+        tileset,
+        selectedCharacter,
+        state.playerX,
+        state.playerY,
+      );
 
       // Write scene lines
       for (let i = 0; i < sceneLines.length; i++) {
@@ -892,9 +897,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       const characterTile = extractTile(tileset, selectedCharacter);
       const characterComposite = compositeTiles(characterTile, grassTile, 1);
 
-      const scene: RGB[][][][] = [
-        [grassTile, characterComposite, grassTile],
-      ];
+      const scene: RGB[][][][] = [[grassTile, characterComposite, grassTile]];
 
       const renderedTiles: string[][][] = [];
       for (let col = 0; col < 3; col++) {

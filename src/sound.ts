@@ -5,9 +5,9 @@
  * Uses play-sound package for cross-platform support (Linux, Mac, Windows).
  */
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import playSound from 'play-sound';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 // Get package root directory (works when installed globally or locally)
 const __filename = fileURLToPath(import.meta.url);

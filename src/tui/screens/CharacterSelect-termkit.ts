@@ -7,19 +7,19 @@
  */
 
 import termKit from 'terminal-kit';
+import { playSfx } from '../../sound.js';
 import {
-  Tileset,
-  TILE,
-  TILE_SIZE,
   CHAR_HEIGHT,
-  RESET,
-  loadTileset,
-  extractTile,
   compositeTiles,
   compositeWithFocus,
+  extractTile,
+  loadTileset,
+  RESET,
   renderTile,
+  TILE,
+  TILE_SIZE,
+  type Tileset,
 } from '../tileset.js';
-import { playSfx } from '../../sound.js';
 
 const term = termKit.terminal;
 
@@ -70,10 +70,7 @@ const CYAN = '\x1b[36m';
  * Characters are displayed in a horizontal row with the selected one highlighted.
  * Character tiles are rendered with transparency preserved (no background compositing).
  */
-function renderCharacterRow(
-  tileset: Tileset,
-  selectedIndex: number
-): string[] {
+function renderCharacterRow(tileset: Tileset, selectedIndex: number): string[] {
   // Extract focus tile
   const focusTile = extractTile(tileset, TILE.FOCUS);
 
@@ -118,10 +115,7 @@ function renderCharacterRow(
  * Calculate the total width of the character row in characters.
  */
 function getRowWidth(): number {
-  return (
-    CHARACTER_TILES.length * TILE_DISPLAY_WIDTH +
-    (CHARACTER_TILES.length - 1) * TILE_SPACING
-  );
+  return CHARACTER_TILES.length * TILE_DISPLAY_WIDTH + (CHARACTER_TILES.length - 1) * TILE_SPACING;
 }
 
 // ============================================================================
@@ -139,10 +133,10 @@ export interface CharacterSelectResult {
 }
 
 export async function showCharacterSelect(): Promise<CharacterSelectResult> {
-  return new Promise(async (resolve) => {
-    // Load tileset
-    const tileset = await loadTileset();
+  // Load tileset before entering the Promise
+  const tileset = await loadTileset();
 
+  return new Promise((resolve) => {
     // Initialize terminal
     term.fullscreen(true);
     term.hideCursor();
@@ -155,10 +149,10 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
     // Get terminal dimensions
     let width = 180;
     let height = 50;
-    if (typeof term.width === 'number' && isFinite(term.width) && term.width > 0) {
+    if (typeof term.width === 'number' && Number.isFinite(term.width) && term.width > 0) {
       width = term.width;
     }
-    if (typeof term.height === 'number' && isFinite(term.height) && term.height > 0) {
+    if (typeof term.height === 'number' && Number.isFinite(term.height) && term.height > 0) {
       height = term.height;
     }
 
@@ -212,7 +206,8 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
 
       // Instructions at bottom
       const instructionY = nameY + 2;
-      const instructions = '[LEFT/RIGHT or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
+      const instructions =
+        '[LEFT/RIGHT or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
       term.moveTo(Math.max(1, Math.floor((width - instructions.length) / 2)), instructionY);
       process.stdout.write(`${DIM}${instructions}${RESET}`);
     }

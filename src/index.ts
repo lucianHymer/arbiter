@@ -1,11 +1,19 @@
 #!/usr/bin/env node
+
 // Main entry point for the Arbiter system
 // Ties together state, router, and TUI for the hierarchical AI orchestration system
 
-import { createInitialState, AppState } from './state.js';
 import { Router } from './router.js';
-import { createTUI, TUI, showTitleScreen, showCharacterSelect, showForestIntro, checkGitignore } from './tui/index.js';
 import { loadSession } from './session-persistence.js';
+import { type AppState, createInitialState } from './state.js';
+import {
+  checkGitignore,
+  createTUI,
+  showCharacterSelect,
+  showForestIntro,
+  showTitleScreen,
+  type TUI,
+} from './tui/index.js';
 
 /**
  * Session information for persistence on exit
@@ -30,7 +38,7 @@ function outputSessionInfo(state: AppState): void {
   };
 
   // Output to stderr so it doesn't interfere with TUI output
-  process.stderr.write(JSON.stringify(sessionInfo) + '\n');
+  process.stderr.write(`${JSON.stringify(sessionInfo)}\n`);
 }
 
 /**
@@ -97,7 +105,7 @@ async function main(): Promise<void> {
     }
 
     // Check for positional requirements file argument (first non-flag arg)
-    const positionalArgs = args.filter(arg => !arg.startsWith('--'));
+    const positionalArgs = args.filter((arg) => !arg.startsWith('--'));
     const cliRequirementsFile = positionalArgs[0] || null;
 
     let selectedCharacter: number;

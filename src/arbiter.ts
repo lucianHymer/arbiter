@@ -1,16 +1,15 @@
 // Arbiter session module - System prompt, MCP tools, and message generator
 // The Arbiter is the apex of the hierarchical orchestration system
 
-import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type {
-  SDKUserMessage,
   HookCallback,
   HookCallbackMatcher,
-  PostToolUseHookInput,
   HookEvent,
-} from "@anthropic-ai/claude-agent-sdk";
-import { z } from "zod";
-import { toRoman } from "./state.js";
+  PostToolUseHookInput,
+  SDKUserMessage,
+} from '@anthropic-ai/claude-agent-sdk';
+import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
+import { toRoman } from './state.js';
 
 /**
  * The Arbiter's system prompt - defines its personality and role
@@ -434,15 +433,15 @@ export type ArbiterCallbacks = {
  */
 export function createArbiterMcpServer(
   callbacks: ArbiterCallbacks,
-  getOrchestratorCount: () => number
+  getOrchestratorCount: () => number,
 ) {
   return createSdkMcpServer({
-    name: "arbiter-tools",
-    version: "1.0.0",
+    name: 'arbiter-tools',
+    version: '1.0.0',
     tools: [
       tool(
-        "spawn_orchestrator",
-        "Summon a new Orchestrator. They will introduce themselves and await your instructions.",
+        'spawn_orchestrator',
+        'Summon a new Orchestrator. They will introduce themselves and await your instructions.',
         {},
         async () => {
           const orchNum = getOrchestratorCount() + 1;
@@ -453,17 +452,17 @@ export function createArbiterMcpServer(
           return {
             content: [
               {
-                type: "text" as const,
+                type: 'text' as const,
                 text: `Orchestrator ${toRoman(orchNum)} awakens. They will introduce themselves shortly.`,
               },
             ],
           };
-        }
+        },
       ),
 
       tool(
-        "disconnect_orchestrators",
-        "Release all Orchestrators. Your words will once again reach the human directly.",
+        'disconnect_orchestrators',
+        'Release all Orchestrators. Your words will once again reach the human directly.',
         {},
         async () => {
           // Notify the main app to disconnect orchestrators
@@ -472,12 +471,12 @@ export function createArbiterMcpServer(
           return {
             content: [
               {
-                type: "text" as const,
-                text: "The threads are severed. You speak to the mortal once more.",
+                type: 'text' as const,
+                text: 'The threads are severed. You speak to the mortal once more.',
               },
             ],
           };
-        }
+        },
       ),
     ],
   });
@@ -496,7 +495,7 @@ export type ArbiterHooksCallbacks = {
  * @returns Hooks configuration object for use with query()
  */
 export function createArbiterHooks(
-  callbacks: ArbiterHooksCallbacks
+  callbacks: ArbiterHooksCallbacks,
 ): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
   const postToolUseHook: HookCallback = async (input, _toolUseId, _options) => {
     const hookInput = input as PostToolUseHookInput;
@@ -527,13 +526,13 @@ export type SDKInputMessage = SDKUserMessage;
  * @yields A user message in SDK format
  */
 export async function* createArbiterMessageStream(
-  content: string
+  content: string,
 ): AsyncGenerator<SDKInputMessage> {
   const message: SDKUserMessage = {
-    type: "user",
-    session_id: "", // Will be populated by the SDK
+    type: 'user',
+    session_id: '', // Will be populated by the SDK
     message: {
-      role: "user",
+      role: 'user',
       content: content,
     },
     parent_tool_use_id: null,

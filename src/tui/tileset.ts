@@ -5,9 +5,9 @@
  * compositing tiles together, and rendering them to ANSI terminal output.
  */
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
-import path from 'path';
-import { fileURLToPath } from 'url';
 
 // ============================================================================
 // Constants
@@ -148,7 +148,11 @@ export function compositeTiles(fg: RGB[][], bg: RGB[][], alphaThreshold: number)
  * Composite focus overlay on character tile
  * The focus overlay has transparent center, only the corner brackets show
  */
-export function compositeWithFocus(charPixels: RGB[][], focusPixels: RGB[][], alphaThreshold: number = 1): RGB[][] {
+export function compositeWithFocus(
+  charPixels: RGB[][],
+  focusPixels: RGB[][],
+  alphaThreshold: number = 1,
+): RGB[][] {
   const size = charPixels.length;
   const result: RGB[][] = [];
 
@@ -170,7 +174,7 @@ export function compositeWithFocus(charPixels: RGB[][], focusPixels: RGB[][], al
  * Mirror a tile horizontally (flip left-right)
  */
 export function mirrorTile(pixels: RGB[][]): RGB[][] {
-  return pixels.map(row => [...row].reverse());
+  return pixels.map((row) => [...row].reverse());
 }
 
 /**
@@ -227,7 +231,7 @@ export function compositeQuarterTile(
   base: RGB[][],
   quarter: RGB[][],
   position: QuarterPosition,
-  alphaThreshold: number = 1
+  alphaThreshold: number = 1,
 ): RGB[][] {
   const halfSize = TILE_SIZE / 2; // 8
   let startX = 0;
@@ -253,7 +257,7 @@ export function compositeQuarterTile(
   }
 
   // Clone the base tile
-  const result: RGB[][] = base.map(row => row.map(px => ({ ...px })));
+  const result: RGB[][] = base.map((row) => row.map((px) => ({ ...px })));
 
   // Overlay the quarter
   for (let y = 0; y < halfSize; y++) {
@@ -287,7 +291,7 @@ export function renderTile(pixels: RGB[][]): string[] {
     for (let x = 0; x < TILE_SIZE; x++) {
       const top = pixels[y][x];
       const bot = pixels[y + 1]?.[x] || top;
-      line += tc(top.r, top.g, top.b, true) + tc(bot.r, bot.g, bot.b, false) + '▄';
+      line += `${tc(top.r, top.g, top.b, true) + tc(bot.r, bot.g, bot.b, false)}▄`;
     }
     line += RESET;
     lines.push(line);

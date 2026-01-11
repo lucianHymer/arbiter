@@ -5,10 +5,10 @@
  * If not, prompts user to add them. Skips silently if not in a git repo.
  */
 
+import { execSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import termKit from 'terminal-kit';
-import { execSync } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 
 const term = termKit.terminal;
 
@@ -19,10 +19,7 @@ const YELLOW = '\x1b[33m';
 const GREEN = '\x1b[32m';
 
 // Files that Arbiter creates and should be gitignored
-const ARBITER_FILES = [
-  '.claude/.arbiter-session.json',
-  '.claude/arbiter.tmp.log',
-];
+const ARBITER_FILES = ['.claude/.arbiter-session.json', '.claude/arbiter.tmp.log'];
 
 // What to append to .gitignore
 const GITIGNORE_ENTRIES = `
@@ -103,16 +100,16 @@ export async function checkGitignore(): Promise<void> {
     // Get terminal dimensions
     let width = 180;
     let height = 50;
-    if (typeof term.width === 'number' && isFinite(term.width) && term.width > 0) {
+    if (typeof term.width === 'number' && Number.isFinite(term.width) && term.width > 0) {
       width = term.width;
     }
-    if (typeof term.height === 'number' && isFinite(term.height) && term.height > 0) {
+    if (typeof term.height === 'number' && Number.isFinite(term.height) && term.height > 0) {
       height = term.height;
     }
 
     // Content lines
     const lines = [
-      'The Arbiter creates files that shouldn\'t be committed:',
+      "The Arbiter creates files that shouldn't be committed:",
       '',
       ...unignoredFiles.map((f) => `  ${f}`),
       '',
