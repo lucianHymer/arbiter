@@ -1308,6 +1308,13 @@ Take your time. This phase determines everything that follows.`
         for await (const message of currentGenerator) {
           // Reset retries on each successful message
           retries = 0;
+
+          // Update activity time on ANY SDK message (including subagent results)
+          // This prevents false timeouts when orchestrator delegates to Task subagents
+          if (this.currentOrchestratorSession) {
+            this.currentOrchestratorSession.lastActivityTime = Date.now();
+          }
+
           await this.handleOrchestratorMessage(message);
         }
         // Successfully finished processing
