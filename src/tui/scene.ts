@@ -53,6 +53,9 @@ export interface SceneState {
   // Chat bubble indicator - shows over the most recent speaker
   chatBubbleTarget: 'human' | 'arbiter' | 'conjuring' | null;
 
+  // Alert/exclamation indicator - shows over a character (e.g., arbiter noticing scroll)
+  alertTarget: 'human' | 'arbiter' | 'conjuring' | null;
+
   // Scroll of requirements visibility
   scrollVisible: boolean;
 }
@@ -155,6 +158,9 @@ export function createInitialSceneState(): SceneState {
 
     // Chat bubble
     chatBubbleTarget: null,
+
+    // Alert/exclamation indicator
+    alertTarget: null,
 
     // Scroll of requirements
     scrollVisible: false,
@@ -316,6 +322,20 @@ function getChatBubbleQuarter(tileset: Tileset): RGB[][] {
   return chatBubbleQuarterCache;
 }
 
+// Cache for the alert/exclamation quarter tile (extracted once, reused)
+let alertQuarterCache: RGB[][] | null = null;
+
+/**
+ * Get or create the cached alert/exclamation quarter tile
+ */
+function getAlertQuarter(tileset: Tileset): RGB[][] {
+  if (!alertQuarterCache) {
+    const quartersTile = extractTile(tileset, TILE.ALERT_QUARTERS);
+    alertQuarterCache = extractQuarterTile(quartersTile, 'top-left');
+  }
+  return alertQuarterCache;
+}
+
 /**
  * Render the scene to an ANSI string
  *
@@ -342,6 +362,15 @@ export function renderScene(
     bubbleCol = pos.col;
   }
 
+  // Determine alert/exclamation position if target is set
+  let alertRow = -1;
+  let alertCol = -1;
+  if (sceneState?.alertTarget) {
+    const pos = getChatBubblePosition(sceneState, sceneState.alertTarget);
+    alertRow = pos.row;
+    alertCol = pos.col;
+  }
+
   const renderedTiles: string[][][] = [];
 
   for (let row = 0; row < scene.length; row++) {
@@ -358,11 +387,12 @@ export function renderScene(
         mirrored = tileSpec.mirrored;
       }
 
-      // Check if this position needs the chat bubble
+      // Check if this position needs an overlay (chat bubble or alert)
       const needsBubble = row === bubbleRow && col === bubbleCol;
+      const needsAlert = row === alertRow && col === alertCol;
 
-      if (needsBubble) {
-        // Render without cache, adding the chat bubble overlay
+      if (needsBubble || needsAlert) {
+        // Render without cache, adding the overlay
         let pixels = extractTile(tileset, tileIndex);
 
         // Composite on grass if needed
@@ -375,8 +405,16 @@ export function renderScene(
         }
 
         // Add chat bubble to top-right corner
-        const bubbleQuarter = getChatBubbleQuarter(tileset);
-        pixels = compositeQuarterTile(pixels, bubbleQuarter, 'top-right', 1);
+        if (needsBubble) {
+          const bubbleQuarter = getChatBubbleQuarter(tileset);
+          pixels = compositeQuarterTile(pixels, bubbleQuarter, 'top-right', 1);
+        }
+
+        // Add alert/exclamation to top-left corner
+        if (needsAlert) {
+          const alertQuarter = getAlertQuarter(tileset);
+          pixels = compositeQuarterTile(pixels, alertQuarter, 'top-left', 1);
+        }
 
         renderedRow.push(renderTile(pixels));
       } else {

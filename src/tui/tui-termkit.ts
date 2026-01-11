@@ -2411,12 +2411,22 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    */
   function startArbiterWalk() {
     animateArbiterWalk(0, () => {
-      // Entrance complete - show any pending message
-      entranceComplete = true;
-      if (pendingArbiterMessage) {
-        addMessage('arbiter', pendingArbiterMessage);
-        pendingArbiterMessage = null;
-      }
+      // Arbiter arrived at scroll - show alert/exclamation indicator
+      state.sceneState.alertTarget = 'arbiter';
+      drawTiles(true);
+
+      // Pause to let user see the alert (~1.5 seconds)
+      setTimeout(() => {
+        state.sceneState.alertTarget = null;
+        drawTiles(true);
+
+        // Now complete entrance and show message
+        entranceComplete = true;
+        if (pendingArbiterMessage) {
+          addMessage('arbiter', pendingArbiterMessage);
+          pendingArbiterMessage = null;
+        }
+      }, 1500);
     });
   }
 
