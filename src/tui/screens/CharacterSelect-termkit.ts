@@ -19,6 +19,7 @@ import {
   compositeWithFocus,
   renderTile,
 } from '../tileset.js';
+import { playSfx } from '../../sound.js';
 
 const term = termKit.terminal;
 
@@ -234,26 +235,32 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
     term.on('key', (key: string) => {
       // Navigation
       if (key === 'LEFT' || key === 'h') {
+        playSfx('menuLeft');
         // Move selection left (wrap around)
         selectedIndex = (selectedIndex - 1 + CHARACTER_TILES.length) % CHARACTER_TILES.length;
         drawScreen();
       } else if (key === 'RIGHT' || key === 'l') {
+        playSfx('menuRight');
         // Move selection right (wrap around)
         selectedIndex = (selectedIndex + 1) % CHARACTER_TILES.length;
         drawScreen();
       } else if (key === 'UP' || key === 'k') {
+        playSfx('menuLeft');
         // Up moves to previous row (4 characters per row for grid layout)
         selectedIndex = (selectedIndex - 4 + CHARACTER_TILES.length) % CHARACTER_TILES.length;
         drawScreen();
       } else if (key === 'DOWN' || key === 'j') {
+        playSfx('menuRight');
         // Down moves to next row (4 characters per row for grid layout)
         selectedIndex = (selectedIndex + 4) % CHARACTER_TILES.length;
         drawScreen();
       } else if (key === 'ENTER') {
+        playSfx('menuSelect');
         // Confirm selection, go to path intro
         cleanup();
         resolve({ character: CHARACTER_TILES[selectedIndex], skipIntro: false });
       } else if (key === ' ') {
+        playSfx('menuSelect');
         // Skip intro, go straight to arbiter
         cleanup();
         resolve({ character: CHARACTER_TILES[selectedIndex], skipIntro: true });

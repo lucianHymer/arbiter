@@ -19,6 +19,7 @@ import {
   renderTile,
   RGB,
 } from '../tileset.js';
+import { playSfx } from '../../sound.js';
 
 const term = termKit.terminal;
 
@@ -777,11 +778,22 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         return;
       }
 
+      // Detect if dialogue just appeared (for sound effects)
+      const signDialogueJustAppeared = showMessage && !tracker.lastShowMessage;
+      const ratDialogueJustAppeared = showRatMessage && !tracker.lastShowRatMessage;
+
       tracker.lastPlayerX = state.playerX;
       tracker.lastPlayerY = state.playerY;
       tracker.lastPhase = state.phase;
       tracker.lastShowMessage = showMessage;
       tracker.lastShowRatMessage = showRatMessage;
+
+      // Play dialogue appearance sounds
+      if (signDialogueJustAppeared) {
+        playSfx('quickNotice');
+      } else if (ratDialogueJustAppeared) {
+        playSfx('quickNotice');
+      }
 
       const sceneLines = renderForestScene(tileset, selectedCharacter, state.playerX, state.playerY);
 
@@ -985,6 +997,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
           // Check if this is the valid exit: moving right off screen on path row after seeing sign
           if (newX >= SCENE_WIDTH_TILES && newY === START_Y && state.hasSeenSign) {
             // Successfully exited by walking off the right edge on the path!
+            playSfx('quickNotice');
             cleanup();
             resolve('success');
             return;
@@ -993,11 +1006,13 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
           if (newX < 0 && newY === START_Y) {
             // Turned back - retreat screen
             state.phase = 'retreat';
+            playSfx('quickNotice');
             drawRetreatScreen();
             return;
           }
           // Wandered off in wrong direction or skipped sign - death!
           state.phase = 'dead';
+          playSfx('death');
           drawDeathScreen();
           return;
         }
@@ -1011,6 +1026,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         // Valid move - update position
         state.playerX = newX;
         state.playerY = newY;
+        playSfx('footstep');
 
         drawScene();
       }

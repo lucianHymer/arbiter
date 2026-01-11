@@ -6,6 +6,7 @@
  */
 
 import termKit from 'terminal-kit';
+import { playSfx } from '../../sound.js';
 
 const term = termKit.terminal;
 
@@ -141,6 +142,7 @@ export async function showTitleScreen(): Promise<void> {
       }
 
       // Any other key continues to character select
+      playSfx('menuSelect');
       cleanup();
       resolve();
     });

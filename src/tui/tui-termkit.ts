@@ -31,6 +31,7 @@ import type { RouterCallbacks, DebugLogEntry } from '../router.js';
 import type { AppState } from '../state.js';
 import { toRoman } from '../state.js';
 import type { WaitingState, Message, Speaker } from './types.js';
+import { playSfx } from '../sound.js';
 
 // ============================================================================
 // Types
@@ -954,6 +955,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     drawChat();
     drawTiles(true); // Force redraw tiles for chat bubble
+    playSfx('quickNotice');
   }
 
   // ============================================================================
@@ -1432,6 +1434,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Advance frame within current hop
       if (hopState.frameInHop === 0) {
         // Was up, now go down
+        playSfx('jump');
         hopState.frameInHop = 1;
       } else {
         // Was down, complete this hop
@@ -1530,6 +1533,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Type-safe position clamping
       if (newPos >= -1 && newPos <= 3) {
         state.sceneState.arbiterPos = newPos as -1 | 0 | 1 | 2 | 3;
+        playSfx('footstep');
         drawTiles(true); // Force redraw for walk animation
 
         if (newPos === targetPos) {
@@ -1599,6 +1603,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Brief pause, then show demon
     setTimeout(() => {
       state.sceneState.demonCount = nextDemon;
+      playSfx('magic');
       drawTiles(true);
       // Process next demon if any (recursive with delay)
       if (pendingDemonSpawns.length > 0) {
