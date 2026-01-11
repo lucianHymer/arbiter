@@ -1152,7 +1152,6 @@ Take your time. This phase determines everything that follows.`
    * Process messages from the Arbiter session with retry logic for crash recovery
    */
   private async processArbiterMessages(generator: ReturnType<typeof query>): Promise<void> {
-    this.isProcessing = true;
     let retries = 0;
     let currentGenerator: ReturnType<typeof query> = generator;
 
@@ -1217,8 +1216,6 @@ Take your time. This phase determines everything that follows.`
     } catch (error) {
       console.error('Error processing Arbiter messages:', error);
       throw error;
-    } finally {
-      this.isProcessing = false;
     }
   }
 
