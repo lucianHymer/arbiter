@@ -1,7 +1,13 @@
 // Orchestrator session module - System prompt, hooks, and message generator
 // Orchestrators coordinate work under the direction of the Arbiter
 
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKUserMessage,
+  HookCallback,
+  HookCallbackMatcher,
+  PostToolUseHookInput,
+  HookEvent,
+} from "@anthropic-ai/claude-agent-sdk";
 
 /**
  * The Orchestrator's system prompt - defines its role and operating pattern
@@ -186,33 +192,47 @@ export type OrchestratorCallbacks = {
 export function createOrchestratorHooks(
   callbacks: OrchestratorCallbacks,
   getContextPercent: (sessionId: string) => number
-): object {
-  return {
-    PostToolUse: async (input: { session_id: string; tool_name: string }) => {
-      // Notify the main app of tool usage
-      callbacks.onToolUse(input.tool_name);
+): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  const postToolUseHook: HookCallback = async (input, _toolUseId, _options) => {
+    const hookInput = input as PostToolUseHookInput;
 
-      // Get current context percentage
-      const pct = getContextPercent(input.session_id);
+    // Notify the main app of tool usage
+    callbacks.onToolUse(hookInput.tool_name);
 
-      // Notify the main app of context update
-      callbacks.onContextUpdate(input.session_id, pct);
+    // Get current context percentage
+    const pct = getContextPercent(hookInput.session_id);
 
-      // Return context warnings at thresholds
-      if (pct > 85) {
-        return {
-          systemMessage:
+    // Notify the main app of context update
+    callbacks.onContextUpdate(hookInput.session_id, pct);
+
+    // Return context warnings at thresholds
+    if (pct > 85) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse' as const,
+          additionalContext:
             "CONTEXT CRITICAL. Cease new work. Report your progress and remaining tasks to the Arbiter immediately.",
-        };
-      } else if (pct > 70) {
-        return {
-          systemMessage:
+        },
+      };
+    } else if (pct > 70) {
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PostToolUse' as const,
+          additionalContext:
             "Context thins. Begin concluding your current thread. Prepare to hand off.",
-        };
-      }
+        },
+      };
+    }
 
-      return {};
-    },
+    return {};
+  };
+
+  return {
+    PostToolUse: [
+      {
+        hooks: [postToolUseHook],
+      },
+    ],
   };
 }
 

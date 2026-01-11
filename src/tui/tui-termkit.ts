@@ -84,6 +84,11 @@ interface TUIState {
   toolCallCount: number;
   lastToolTime: number;  // timestamp when tool was last set
 
+  // Tool indicator (shown between messages)
+  recentTools: string[];  // Last 2 tools used
+  toolCountSinceLastMessage: number;  // Total tool calls since last chat message
+  showToolIndicator: boolean;  // Whether to show the tool indicator
+
   // Animation state
   animationFrame: number;
   blinkCycle: number; // Slower counter for chat blink (increments every animation cycle)
@@ -107,11 +112,13 @@ interface RedrawTracker {
   lastMode: 'NORMAL' | 'INSERT';
   lastMessageCount: number;
   lastContextPercent: number;
-  lastTool: string | null;
+  lastOrchestratorPercent: number | null;
   lastChatWaitingFor: WaitingState;
   lastChatAnimFrame: number;
   lastCursorPos: number;
   lastInputHeight: number;
+  lastShowToolIndicator: boolean;
+  lastToolCount: number;
 }
 
 // ============================================================================
@@ -277,6 +284,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     currentTool: null,
     toolCallCount: 0,
     lastToolTime: 0,
+    recentTools: [],
+    toolCountSinceLastMessage: 0,
+    showToolIndicator: false,
     animationFrame: 0,
     blinkCycle: 0,
     waitingFor: 'none',
@@ -293,11 +303,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     lastMode: 'INSERT',
     lastMessageCount: -1,
     lastContextPercent: -1,
-    lastTool: null,
+    lastOrchestratorPercent: null,
     lastChatWaitingFor: 'none',
     lastChatAnimFrame: -1,
     lastCursorPos: -1,
     lastInputHeight: 1,
+    lastShowToolIndicator: false,
+    lastToolCount: 0,
   };
 
   // Callbacks
@@ -453,31 +465,30 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       }
     }
 
-    // Always reserve space for working indicator (2 lines: blank + indicator)
-    // This prevents layout jumping when waiting state changes
+    // Working indicator line (always visible when waiting, dots animate)
     if (renderedLines.length > 0) {
       renderedLines.push({ text: '', color: COLORS.reset });
     }
     if (state.waitingFor !== 'none') {
-      const showIndicator = state.blinkCycle % 2 === 0;
-      if (showIndicator) {
-        const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
-        const dots = '.'.repeat((state.blinkCycle % 3) + 1);
-        const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
-        renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
-      } else {
-        renderedLines.push({ text: '', color: COLORS.reset });
-      }
+      const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
+      // Animate dots: ., .., ..., blank, repeat (cycles every 4 blink cycles)
+      const dotPhase = state.blinkCycle % 4;
+      const dots = dotPhase < 3 ? '.'.repeat(dotPhase + 1) : '';
+      const indicatorColor = state.waitingFor === 'arbiter' ? COLORS.arbiter : COLORS.orchestrator;
+      renderedLines.push({ text: `${waiting} is working${dots}`, color: `\x1b[2m${indicatorColor}` });
     } else {
       renderedLines.push({ text: '', color: COLORS.reset });
     }
 
-    // Always reserve space for tool indicator (2 lines: blank + tool)
-    renderedLines.push({ text: '', color: COLORS.reset });
-    if (state.currentTool && Date.now() - state.lastToolTime < 5000) {
-      const pulse = state.animationFrame < 4 ? '⸬' : ' ';
-      const toolText = `${pulse} ${state.currentTool} ${pulse}`;
-      renderedLines.push({ text: toolText, color: `\x1b[2m\x1b[35m` });
+    // Tool indicator line (directly below working indicator, no extra blank)
+    if (state.showToolIndicator && state.recentTools.length > 0) {
+      const toolsText = state.recentTools.join(' → ');
+      const countText = `(${state.toolCountSinceLastMessage} tool${state.toolCountSinceLastMessage === 1 ? '' : 's'})`;
+      const pulse = state.animationFrame < 4 ? '·' : ' ';
+      const toolText = `${pulse} ${toolsText} ${countText} ${pulse}`;
+      // Use same color as working indicator (yellow for arbiter, cyan for orchestrator)
+      const toolColor = state.waitingFor === 'orchestrator' ? COLORS.orchestrator : COLORS.arbiter;
+      renderedLines.push({ text: toolText, color: `\x1b[2m${toolColor}` });
     } else {
       renderedLines.push({ text: '', color: COLORS.reset });
     }
@@ -499,12 +510,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const blinkChanged =
       state.waitingFor !== 'none' &&
       state.blinkCycle !== tracker.lastChatAnimFrame;
+    // Track tool indicator changes
+    const toolIndicatorChanged =
+      state.showToolIndicator !== tracker.lastShowToolIndicator ||
+      state.toolCountSinceLastMessage !== tracker.lastToolCount;
 
-    if (!force && !scrollChanged && !messagesChanged && !waitingChanged && !blinkChanged) return;
+    if (!force && !scrollChanged && !messagesChanged && !waitingChanged && !blinkChanged && !toolIndicatorChanged) return;
 
     tracker.lastScrollOffset = state.scrollOffset;
     tracker.lastMessageCount = state.messages.length;
     tracker.lastChatWaitingFor = state.waitingFor;
+    tracker.lastShowToolIndicator = state.showToolIndicator;
+    tracker.lastToolCount = state.toolCountSinceLastMessage;
     tracker.lastChatAnimFrame = state.blinkCycle;
 
     const layout = getLayout(state.inputBuffer);
@@ -545,13 +562,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     const contextChanged =
       state.arbiterContextPercent !== tracker.lastContextPercent ||
-      state.currentTool !== tracker.lastTool;
+      state.orchestratorContextPercent !== tracker.lastOrchestratorPercent;
 
     if (!force && !contextChanged) return;
 
     // Update trackers
     tracker.lastContextPercent = state.arbiterContextPercent;
-    tracker.lastTool = state.currentTool;
+    tracker.lastOrchestratorPercent = state.orchestratorContextPercent;
 
     const layout = getLayout(state.inputBuffer);
     const contextX = layout.contextBar.x;
@@ -574,11 +591,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       contextInfo += `\x1b[36m${orchCtx}\x1b[0m`;
     }
 
-    // Tool info
-    if (state.currentTool) {
-      const toolInfo = `  ·  ${state.currentTool} (${state.toolCallCount})`;
-      contextInfo += `\x1b[35m${toolInfo}\x1b[0m`;
-    }
+    // Tool info removed - now shown in chat area indicator instead
 
     // Crash indicator
     if (state.crashCount > 0) {
@@ -844,7 +857,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastMode = state.mode;
     tracker.lastMessageCount = -1;
     tracker.lastContextPercent = -1;
-    tracker.lastTool = null;
+    tracker.lastOrchestratorPercent = null;
     tracker.lastInputHeight = 1;
 
     term.clear();
@@ -1699,6 +1712,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     return {
       onHumanMessage: (text: string) => {
         addMessage('human', text);
+        // Hide tool indicator on message
+        state.showToolIndicator = false;
+        state.recentTools = [];
+        state.toolCountSinceLastMessage = 0;
       },
 
       onArbiterMessage: (text: string) => {
@@ -1708,10 +1725,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         } else {
           addMessage('arbiter', text);
         }
+        // Hide tool indicator on message
+        state.showToolIndicator = false;
+        state.recentTools = [];
+        state.toolCountSinceLastMessage = 0;
       },
 
       onOrchestratorMessage: (orchestratorNumber: number, text: string) => {
         addMessage('orchestrator', text, orchestratorNumber);
+        // Hide tool indicator on message
+        state.showToolIndicator = false;
+        state.recentTools = [];
+        state.toolCountSinceLastMessage = 0;
       },
 
       onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => {
@@ -1724,6 +1749,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         state.currentTool = tool;
         state.toolCallCount = count;
         state.lastToolTime = Date.now();
+
+        // Update tool indicator state
+        state.toolCountSinceLastMessage++;
+        state.showToolIndicator = true;
+        // Keep last 2 tools
+        if (state.recentTools.length === 0 || state.recentTools[state.recentTools.length - 1] !== tool) {
+          state.recentTools.push(tool);
+          if (state.recentTools.length > 2) {
+            state.recentTools.shift();
+          }
+        }
+
         drawContext();
         drawChat();  // Also redraw chat for tool indicator
       },

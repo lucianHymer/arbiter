@@ -2,7 +2,13 @@
 // The Arbiter is the apex of the hierarchical orchestration system
 
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
-import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
+import type {
+  SDKUserMessage,
+  HookCallback,
+  HookCallbackMatcher,
+  PostToolUseHookInput,
+  HookEvent,
+} from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { toRoman } from "./state.js";
 
@@ -444,6 +450,37 @@ export function createArbiterMcpServer(
       ),
     ],
   });
+}
+
+/**
+ * Callbacks for Arbiter hooks to communicate tool usage with the main application
+ */
+export type ArbiterHooksCallbacks = {
+  onToolUse: (tool: string) => void;
+};
+
+/**
+ * Creates the hooks configuration for Arbiter sessions
+ * @param callbacks - Callbacks to notify the main app of tool usage
+ * @returns Hooks configuration object for use with query()
+ */
+export function createArbiterHooks(
+  callbacks: ArbiterHooksCallbacks
+): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  const postToolUseHook: HookCallback = async (input, _toolUseId, _options) => {
+    const hookInput = input as PostToolUseHookInput;
+    // Notify the main app of tool usage
+    callbacks.onToolUse(hookInput.tool_name);
+    return {};
+  };
+
+  return {
+    PostToolUse: [
+      {
+        hooks: [postToolUseHook],
+      },
+    ],
+  };
 }
 
 /**

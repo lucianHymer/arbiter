@@ -8,6 +8,8 @@ import type {
   SDKAssistantMessage,
   SDKResultMessage,
   Options,
+  HookEvent,
+  HookCallbackMatcher,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { saveSession, PersistedSession } from './session-persistence.js';
@@ -80,7 +82,9 @@ const orchestratorOutputJsonSchema = zodToJsonSchema(OrchestratorOutputSchema, {
 import {
   ARBITER_SYSTEM_PROMPT,
   createArbiterMcpServer,
+  createArbiterHooks,
   type ArbiterCallbacks,
+  type ArbiterHooksCallbacks,
 } from "./arbiter.js";
 
 import {
@@ -198,6 +202,7 @@ interface OrchestratorSession {
   toolCallCount: number;                // Total tool calls made (was in Map, now here)
   queue: string[];                      // Queued messages awaiting flush to Arbiter
   lastActivityTime: number;             // For watchdog timeout detection
+  hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>;  // SDK hooks for tool tracking
 }
 
 /**
@@ -378,6 +383,9 @@ export class Router {
   // Track orchestrator count for numbering (I, II, III...)
   private orchestratorCount = 0;
 
+  // Track Arbiter tool calls
+  private arbiterToolCallCount = 0;
+
   // Pending orchestrator spawn flag
   private pendingOrchestratorSpawn: boolean = false;
   private pendingOrchestratorNumber: number = 0;
@@ -393,6 +401,9 @@ export class Router {
 
   // Store MCP server for Arbiter session resumption
   private arbiterMcpServer: any = null;
+
+  // Store Arbiter hooks for session resumption
+  private arbiterHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> | null = null;
 
   // Context polling timer - polls /context once per minute via session forking
   private contextPollInterval: NodeJS.Timeout | null = null;
@@ -665,6 +676,48 @@ export class Router {
   // ============================================
 
   /**
+   * Creates options for Arbiter queries
+   * Centralizes all Arbiter-specific options to avoid duplication
+   */
+  private createArbiterOptions(resumeSessionId?: string): Options {
+    return {
+      systemPrompt: ARBITER_SYSTEM_PROMPT,
+      mcpServers: this.arbiterMcpServer ? { "arbiter-tools": this.arbiterMcpServer } : undefined,
+      hooks: this.arbiterHooks ?? undefined,
+      abortController: this.arbiterAbortController ?? new AbortController(),
+      permissionMode: 'bypassPermissions',
+      allowedTools: [...ARBITER_ALLOWED_TOOLS],
+      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+    };
+  }
+
+  /**
+   * Creates options for Orchestrator queries
+   * Centralizes all Orchestrator-specific options to avoid duplication
+   * @param hooks - Hooks object (from session or newly created)
+   * @param abortController - AbortController (from session or newly created)
+   * @param resumeSessionId - Optional session ID for resuming
+   */
+  private createOrchestratorOptions(
+    hooks: object,
+    abortController: AbortController,
+    resumeSessionId?: string
+  ): Options {
+    return {
+      systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
+      hooks,
+      abortController,
+      permissionMode: 'bypassPermissions',
+      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
+      outputFormat: {
+        type: 'json_schema',
+        schema: orchestratorOutputJsonSchema,
+      },
+      ...(resumeSessionId ? { resume: resumeSessionId } : {}),
+    };
+  }
+
+  /**
    * Creates and starts the Arbiter session with MCP tools
    */
   private async startArbiterSession(): Promise<void> {
@@ -686,6 +739,23 @@ export class Router {
       },
     };
 
+    // Create callbacks for hooks (tool tracking)
+    const arbiterHooksCallbacks: ArbiterHooksCallbacks = {
+      onToolUse: (tool: string) => {
+        this.arbiterToolCallCount++;
+        this.callbacks.onToolUse(tool, this.arbiterToolCallCount);
+
+        // Log tool use to debug
+        this.callbacks.onDebugLog?.({
+          type: 'tool',
+          agent: 'arbiter',
+          speaker: 'Arbiter',
+          text: tool,
+          details: { tool, count: this.arbiterToolCallCount },
+        });
+      },
+    };
+
     // Create MCP server with Arbiter tools
     const mcpServer = createArbiterMcpServer(
       arbiterCallbacks,
@@ -693,22 +763,12 @@ export class Router {
     );
     this.arbiterMcpServer = mcpServer;
 
-    // Query options for the Arbiter session
-    // Note: We use resume to continue sessions if we have a session ID
-    const options: Options = {
-      systemPrompt: ARBITER_SYSTEM_PROMPT,
-      mcpServers: {
-        "arbiter-tools": mcpServer,
-      },
-      abortController: this.arbiterAbortController,
-      // Bypass permissions so MCP tools work without prompts
-      permissionMode: 'bypassPermissions',
-      allowedTools: [...ARBITER_ALLOWED_TOOLS],
-      // Resume if we have an existing session
-      ...(this.state.arbiterSessionId
-        ? { resume: this.state.arbiterSessionId }
-        : {}),
-    };
+    // Create hooks for tool tracking
+    const hooks = createArbiterHooks(arbiterHooksCallbacks);
+    this.arbiterHooks = hooks;
+
+    // Create options using helper
+    const options = this.createArbiterOptions(this.state.arbiterSessionId ?? undefined);
 
     // Note: The Arbiter session runs continuously.
     // We'll send messages to it and process responses in a loop.
@@ -777,20 +837,8 @@ export class Router {
       (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
     );
 
-    // Query options for the Orchestrator session
-    const options: Options = {
-      systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-      hooks: hooks as Options["hooks"],
-      abortController: abortController,
-      // Bypass permissions so tools work without prompts
-      permissionMode: 'bypassPermissions',
-      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
-      // Structured output for reliable routing decisions
-      outputFormat: {
-        type: 'json_schema',
-        schema: orchestratorOutputJsonSchema,
-      },
-    };
+    // Create options using helper (no resume for initial session)
+    const options = this.createOrchestratorOptions(hooks, abortController);
 
     // Create the orchestrator query
     const orchestratorQuery = query({
@@ -808,6 +856,7 @@ export class Router {
       toolCallCount: 0,
       queue: [],
       lastActivityTime: Date.now(),
+      hooks,
     };
 
     // Set up TUI-facing orchestrator state before processing
@@ -894,20 +943,8 @@ export class Router {
       (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0
     );
 
-    // Query options for resuming the Orchestrator session
-    const options: Options = {
-      systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-      hooks: hooks as Options["hooks"],
-      abortController: abortController,
-      permissionMode: 'bypassPermissions',
-      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
-      outputFormat: {
-        type: 'json_schema',
-        schema: orchestratorOutputJsonSchema,
-      },
-      // Resume the existing session
-      resume: sessionId,
-    };
+    // Create options using helper with resume
+    const options = this.createOrchestratorOptions(hooks, abortController, sessionId);
 
     // Create the orchestrator query with a continuation prompt (not introduction)
     const orchestratorQuery = query({
@@ -926,6 +963,7 @@ export class Router {
       toolCallCount: 0,
       queue: [],
       lastActivityTime: Date.now(),
+      hooks,
     };
 
     // Set up TUI-facing orchestrator state
@@ -968,18 +1006,7 @@ export class Router {
     this.callbacks.onWaitingStart?.('arbiter');
 
     // Create a new query to continue the conversation
-    // Note: In the SDK, we use resume with the session ID to continue
-    const options: Options = {
-      systemPrompt: ARBITER_SYSTEM_PROMPT,
-      abortController: this.arbiterAbortController ?? new AbortController(),
-      resume: this.state.arbiterSessionId ?? undefined,
-      mcpServers: this.arbiterMcpServer ? {
-        "arbiter-tools": this.arbiterMcpServer,
-      } : undefined,
-      // Bypass permissions so MCP tools work without prompts
-      permissionMode: 'bypassPermissions',
-      allowedTools: [...ARBITER_ALLOWED_TOOLS],
-    };
+    const options = this.createArbiterOptions(this.state.arbiterSessionId ?? undefined);
 
     this.arbiterQuery = query({
       prompt: text,
@@ -1002,18 +1029,11 @@ export class Router {
     this.callbacks.onWaitingStart?.('orchestrator');
 
     // Create a new query to continue the conversation
-    const options: Options = {
-      systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-      abortController: this.currentOrchestratorSession.abortController,
-      resume: this.currentOrchestratorSession.sessionId,
-      // Bypass permissions so tools work without prompts
-      permissionMode: 'bypassPermissions',
-      // Structured output for reliable routing decisions
-      outputFormat: {
-        type: 'json_schema',
-        schema: orchestratorOutputJsonSchema,
-      },
-    };
+    const options = this.createOrchestratorOptions(
+      this.currentOrchestratorSession.hooks,
+      this.currentOrchestratorSession.abortController,
+      this.currentOrchestratorSession.sessionId
+    );
 
     const newQuery = query({
       prompt: text,
@@ -1172,16 +1192,7 @@ export class Router {
           retries++;
 
           // Create a new resume query
-          const options: Options = {
-            systemPrompt: ARBITER_SYSTEM_PROMPT,
-            abortController: this.arbiterAbortController ?? new AbortController(),
-            resume: this.state.arbiterSessionId ?? undefined,
-            mcpServers: this.arbiterMcpServer ? {
-              "arbiter-tools": this.arbiterMcpServer,
-            } : undefined,
-            permissionMode: 'bypassPermissions',
-            allowedTools: [...ARBITER_ALLOWED_TOOLS],
-          };
+          const options = this.createArbiterOptions(this.state.arbiterSessionId ?? undefined);
 
           currentGenerator = query({
             prompt: "[System: Session resumed after error. Continue where you left off.]",
@@ -1314,17 +1325,11 @@ export class Router {
         retries++;
 
         // Create a new resume query
-        const options: Options = {
-          systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
-          abortController: this.currentOrchestratorSession.abortController,
-          resume: this.currentOrchestratorSession.sessionId,
-          permissionMode: 'bypassPermissions',
-          allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
-          outputFormat: {
-            type: 'json_schema',
-            schema: orchestratorOutputJsonSchema,
-          },
-        };
+        const options = this.createOrchestratorOptions(
+          this.currentOrchestratorSession.hooks,
+          this.currentOrchestratorSession.abortController,
+          this.currentOrchestratorSession.sessionId
+        );
 
         currentGenerator = query({
           prompt: "[System: Session resumed after error. Continue where you left off.]",
