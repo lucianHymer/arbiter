@@ -49,7 +49,7 @@ export type SfxName = keyof typeof SFX;
  */
 export function playSfx(name: SfxName): void {
   const filename = SFX[name];
-  const filepath = path.join(PACKAGE_ROOT, 'sounds', filename);
+  const filepath = path.join(PACKAGE_ROOT, 'assets', 'sounds', filename);
 
   player.play(filepath, (err) => {
     if (err) {
