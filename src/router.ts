@@ -24,6 +24,62 @@ function sleep(ms: number): Promise<void> {
 const MAX_RETRIES = 3;
 const RETRY_DELAYS = [1000, 2000, 4000]; // 1s, 2s, 4s exponential backoff
 
+// Type for context polling function - bound to specific session options
+type ContextPoller = (sessionId: string) => Promise<number | null>;
+
+/**
+ * Creates a query and a paired context poller that uses the same options.
+ * This ensures context polling always matches the session's actual configuration.
+ *
+ * @param prompt - Initial prompt for the session
+ * @param options - Options used to create the session (will also be used for polling)
+ * @returns Tuple of [query generator, context polling function]
+ */
+function createQueryWithPoller(
+  prompt: string,
+  options: Options,
+): [ReturnType<typeof query>, ContextPoller] {
+  const q = query({ prompt, options });
+
+  const pollContext: ContextPoller = async (sessionId: string) => {
+    try {
+      const pollQuery = query({
+        prompt: '/context',
+        options: {
+          ...options,
+          resume: sessionId,
+          forkSession: true, // Fork to avoid polluting main session
+        },
+      });
+
+      let percent: number | null = null;
+
+      for await (const msg of pollQuery) {
+        // /context output comes through as user message with the token info
+        if (msg.type === 'user') {
+          const content = (msg as { message?: { content?: string } }).message?.content;
+          if (typeof content === 'string') {
+            // Match: **Tokens:** 18.4k / 200.0k (9%)
+            const match = content.match(
+              /\*\*Tokens:\*\*\s*([0-9.]+)k\s*\/\s*200\.?0?k\s*\((\d+)%\)/i,
+            );
+            if (match) {
+              percent = parseInt(match[2], 10);
+            }
+          }
+        }
+      }
+
+      return percent;
+    } catch (_error) {
+      // Silently fail - context polling is best-effort
+      return null;
+    }
+  };
+
+  return [q, pollContext];
+}
+
 // Arbiter's allowed tools: MCP tools + read-only exploration
 const ARBITER_ALLOWED_TOOLS = [
   'mcp__arbiter-tools__spawn_orchestrator',
@@ -147,50 +203,6 @@ const MAX_CONTEXT_TOKENS = 200000;
 const CONTEXT_POLL_INTERVAL_MS = 60_000;
 
 /**
- * Poll context usage by forking a session and running /context
- * Uses forkSession: true to avoid polluting the main conversation
- * Note: This does clutter resume history - no workaround found yet
- *
- * @param sessionId - The session ID to fork and check
- * @returns Context percentage (0-100) or null if polling failed
- */
-async function pollContextForSession(sessionId: string): Promise<number | null> {
-  try {
-    const q = query({
-      prompt: '/context',
-      options: {
-        resume: sessionId,
-        forkSession: true, // Fork to avoid polluting main session
-        permissionMode: 'bypassPermissions',
-      } as Options,
-    });
-
-    let percent: number | null = null;
-
-    for await (const msg of q) {
-      // /context output comes through as user message with the token info
-      if (msg.type === 'user') {
-        const content = (msg as { message?: { content?: string } }).message?.content;
-        if (typeof content === 'string') {
-          // Match: **Tokens:** 18.4k / 200.0k (9%)
-          const match = content.match(
-            /\*\*Tokens:\*\*\s*([0-9.]+)k\s*\/\s*200\.?0?k\s*\((\d+)%\)/i,
-          );
-          if (match) {
-            percent = parseInt(match[2], 10);
-          }
-        }
-      }
-    }
-
-    return percent;
-  } catch (_error) {
-    // Silently fail - context polling is best-effort
-    return null;
-  }
-}
-
-/**
  * Orchestrator session state - bundles all orchestrator-related data
  * This replaces the scattered properties that were previously on Router
  */
@@ -204,6 +216,7 @@ interface OrchestratorSession {
   queue: string[]; // Queued messages awaiting flush to Arbiter
   lastActivityTime: number; // For watchdog timeout detection
   hooks: Partial<Record<HookEvent, HookCallbackMatcher[]>>; // SDK hooks for tool tracking
+  pollContext: ContextPoller; // Paired context poller using same options as session
 }
 
 /**
@@ -401,6 +414,9 @@ export class Router {
   // Store Arbiter hooks for session resumption
   private arbiterHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> | null = null;
 
+  // Paired context poller for Arbiter (uses same options as session)
+  private arbiterPollContext: ContextPoller | null = null;
+
   // Context polling timer - polls /context once per minute via session forking
   private contextPollInterval: NodeJS.Timeout | null = null;
 
@@ -439,12 +455,12 @@ export class Router {
 
   /**
    * Poll context for all active sessions
-   * Forks sessions and runs /context to get accurate values
+   * Uses paired pollers that share the same options as the sessions
    */
   private async pollAllContexts(): Promise<void> {
-    // Poll Arbiter context
-    if (this.state.arbiterSessionId) {
-      const arbiterPercent = await pollContextForSession(this.state.arbiterSessionId);
+    // Poll Arbiter context using paired poller
+    if (this.state.arbiterSessionId && this.arbiterPollContext) {
+      const arbiterPercent = await this.arbiterPollContext(this.state.arbiterSessionId);
       if (arbiterPercent !== null) {
         updateArbiterContext(this.state, arbiterPercent);
         this.callbacks.onDebugLog?.({
@@ -455,10 +471,11 @@ export class Router {
       }
     }
 
-    // Poll Orchestrator context if active
+    // Poll Orchestrator context using paired poller
     let orchPercent: number | null = null;
-    if (this.currentOrchestratorSession?.sessionId) {
-      orchPercent = await pollContextForSession(this.currentOrchestratorSession.sessionId);
+    const orchSession = this.currentOrchestratorSession;
+    if (orchSession?.sessionId && orchSession.pollContext) {
+      orchPercent = await orchSession.pollContext(orchSession.sessionId);
       if (orchPercent !== null) {
         updateOrchestratorContext(this.state, orchPercent);
         this.callbacks.onDebugLog?.({
@@ -673,6 +690,7 @@ export class Router {
       hooks: this.arbiterHooks ?? undefined,
       abortController: this.arbiterAbortController ?? new AbortController(),
       permissionMode: 'bypassPermissions',
+      settingSources: ['project'], // Load CLAUDE.md for project context
       allowedTools: [...ARBITER_ALLOWED_TOOLS],
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     };
@@ -695,6 +713,7 @@ export class Router {
       hooks,
       abortController,
       permissionMode: 'bypassPermissions',
+      settingSources: ['project'], // Load CLAUDE.md for project context
       allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
       outputFormat: {
         type: 'json_schema',
@@ -779,10 +798,9 @@ Only when we have achieved 100% alignment on vision, scope, and approach - only 
 Take your time. This phase determines everything that follows.`
       : 'Speak, mortal.';
 
-    this.arbiterQuery = query({
-      prompt: initialPrompt,
-      options,
-    });
+    const [arbiterQuery, pollContext] = createQueryWithPoller(initialPrompt, options);
+    this.arbiterQuery = arbiterQuery;
+    this.arbiterPollContext = pollContext;
 
     // Process the initial response
     await this.processArbiterMessages(this.arbiterQuery);
@@ -846,11 +864,11 @@ Take your time. This phase determines everything that follows.`
     // Create options using helper (no resume for initial session)
     const options = this.createOrchestratorOptions(hooks, abortController);
 
-    // Create the orchestrator query
-    const orchestratorQuery = query({
-      prompt: 'Introduce yourself and await instructions from the Arbiter.',
+    // Create the orchestrator query with paired context poller
+    const [orchestratorQuery, pollContext] = createQueryWithPoller(
+      'Introduce yourself and await instructions from the Arbiter.',
       options,
-    });
+    );
 
     // Create the full OrchestratorSession object
     this.currentOrchestratorSession = {
@@ -863,6 +881,7 @@ Take your time. This phase determines everything that follows.`
       queue: [],
       lastActivityTime: Date.now(),
       hooks,
+      pollContext,
     };
 
     // Set up TUI-facing orchestrator state before processing
@@ -952,11 +971,11 @@ Take your time. This phase determines everything that follows.`
     // Create options using helper with resume
     const options = this.createOrchestratorOptions(hooks, abortController, sessionId);
 
-    // Create the orchestrator query with a continuation prompt (not introduction)
-    const orchestratorQuery = query({
-      prompt: '[System: Session resumed. Continue where you left off.]',
+    // Create the orchestrator query with paired context poller
+    const [orchestratorQuery, pollContext] = createQueryWithPoller(
+      '[System: Session resumed. Continue where you left off.]',
       options,
-    });
+    );
 
     // Create the full OrchestratorSession object
     // Note: sessionId is already known from the saved session
@@ -970,6 +989,7 @@ Take your time. This phase determines everything that follows.`
       queue: [],
       lastActivityTime: Date.now(),
       hooks,
+      pollContext,
     };
 
     // Set up TUI-facing orchestrator state
