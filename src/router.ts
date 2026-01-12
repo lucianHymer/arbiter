@@ -497,15 +497,12 @@ export class Router {
    * Resume from a previously saved session
    */
   async resumeFromSavedSession(saved: PersistedSession): Promise<void> {
-    // Set arbiter session ID so startArbiterSession uses resume
-    this.state.arbiterSessionId = saved.arbiterSessionId;
-
-    // Start arbiter (it will use the session ID for resume)
-    await this.startArbiterSession();
+    // Start arbiter with resume session ID
+    await this.startArbiterSession(saved.arbiterSessionId);
 
     // If there was an active orchestrator, resume it too
     if (saved.orchestratorSessionId && saved.orchestratorNumber) {
-      await this.resumeOrchestratorSession(saved.orchestratorSessionId, saved.orchestratorNumber);
+      await this.startOrchestratorSession(saved.orchestratorNumber, saved.orchestratorSessionId);
     }
 
     // Start context polling
@@ -725,8 +722,9 @@ export class Router {
 
   /**
    * Creates and starts the Arbiter session with MCP tools
+   * @param resumeSessionId - Optional session ID for resuming an existing session
    */
-  private async startArbiterSession(): Promise<void> {
+  private async startArbiterSession(resumeSessionId?: string): Promise<void> {
     // Notify that we're waiting for Arbiter
     this.callbacks.onWaitingStart?.('arbiter');
 
@@ -771,13 +769,13 @@ export class Router {
     this.arbiterHooks = hooks;
 
     // Create options using helper
-    const options = this.createArbiterOptions(this.state.arbiterSessionId ?? undefined);
+    const options = this.createArbiterOptions(resumeSessionId);
 
-    // Note: The Arbiter session runs continuously.
-    // We'll send messages to it and process responses in a loop.
-    // Create initial prompt - reference requirements file if provided
-    const initialPrompt = this.state.requirementsPath
-      ? `@${this.state.requirementsPath}
+    // Choose prompt based on whether resuming or starting fresh
+    const prompt = resumeSessionId
+      ? '[System: Session resumed. Continue where you left off.]'
+      : this.state.requirementsPath
+        ? `@${this.state.requirementsPath}
 
 A Scroll of Requirements has been presented.
 
@@ -796,11 +794,16 @@ Your task now is to achieve COMPLETE UNDERSTANDING before any work begins. This 
 Only when we have achieved 100% alignment on vision, scope, and approach - only when you could explain this task to an Orchestrator with complete confidence - only then do we proceed.
 
 Take your time. This phase determines everything that follows.`
-      : 'Speak, mortal.';
+        : 'Speak, mortal.';
 
-    const [arbiterQuery, pollContext] = createQueryWithPoller(initialPrompt, options);
+    const [arbiterQuery, pollContext] = createQueryWithPoller(prompt, options);
     this.arbiterQuery = arbiterQuery;
     this.arbiterPollContext = pollContext;
+
+    // Store session ID if resuming (will be updated from init message if new)
+    if (resumeSessionId) {
+      this.state.arbiterSessionId = resumeSessionId;
+    }
 
     // Process the initial response
     await this.processArbiterMessages(this.arbiterQuery);
@@ -808,15 +811,17 @@ Take your time. This phase determines everything that follows.`
 
   /**
    * Creates and starts an Orchestrator session
+   * @param number - The orchestrator number (I, II, III...)
+   * @param resumeSessionId - Optional session ID for resuming an existing session
    */
-  private async startOrchestratorSession(number: number): Promise<void> {
-    // Clean up any existing orchestrator before spawning new one (hard abort)
+  private async startOrchestratorSession(number: number, resumeSessionId?: string): Promise<void> {
+    // Clean up any existing orchestrator before spawning/resuming
     this.cleanupOrchestrator();
 
     // Notify that we're waiting for Orchestrator
     this.callbacks.onWaitingStart?.('orchestrator');
 
-    // Increment orchestrator count
+    // Set orchestrator count
     this.orchestratorCount = number;
 
     // Generate unique ID for this orchestrator
@@ -861,128 +866,22 @@ Take your time. This phase determines everything that follows.`
       (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0,
     );
 
-    // Create options using helper (no resume for initial session)
-    const options = this.createOrchestratorOptions(hooks, abortController);
+    // Create options using helper
+    const options = this.createOrchestratorOptions(hooks, abortController, resumeSessionId);
+
+    // Choose prompt based on whether resuming or starting fresh
+    const prompt = resumeSessionId
+      ? '[System: Session resumed. Continue where you left off.]'
+      : 'Introduce yourself and await instructions from the Arbiter.';
 
     // Create the orchestrator query with paired context poller
-    const [orchestratorQuery, pollContext] = createQueryWithPoller(
-      'Introduce yourself and await instructions from the Arbiter.',
-      options,
-    );
+    const [orchestratorQuery, pollContext] = createQueryWithPoller(prompt, options);
 
     // Create the full OrchestratorSession object
     this.currentOrchestratorSession = {
       id: orchId,
       number,
-      sessionId: '', // Will be set when we get the init message
-      query: orchestratorQuery,
-      abortController,
-      toolCallCount: 0,
-      queue: [],
-      lastActivityTime: Date.now(),
-      hooks,
-      pollContext,
-    };
-
-    // Set up TUI-facing orchestrator state before processing
-    // We'll update the session ID when we get the init message
-    setCurrentOrchestrator(this.state, {
-      id: orchId,
-      sessionId: '', // Will be set when we get the init message
-      number,
-    });
-
-    // Switch mode
-    setMode(this.state, 'arbiter_to_orchestrator');
-    this.callbacks.onModeChange('arbiter_to_orchestrator');
-
-    // Notify about orchestrator spawn (for tile scene demon spawning)
-    this.callbacks.onOrchestratorSpawn?.(number);
-
-    // Update context display to show orchestrator (initially at 0%)
-    this.callbacks.onContextUpdate(
-      this.state.arbiterContextPercent,
-      this.state.currentOrchestrator?.contextPercent ?? null,
-    );
-
-    // Start watchdog timer
-    this.startWatchdog();
-
-    // Process orchestrator messages
-    await this.processOrchestratorMessages(this.currentOrchestratorSession.query!);
-  }
-
-  /**
-   * Resume an existing Orchestrator session
-   * Similar to startOrchestratorSession but uses resume option and skips introduction
-   */
-  private async resumeOrchestratorSession(sessionId: string, number: number): Promise<void> {
-    // Clean up any existing orchestrator before resuming
-    this.cleanupOrchestrator();
-
-    // Notify that we're waiting for Orchestrator
-    this.callbacks.onWaitingStart?.('orchestrator');
-
-    // Restore orchestrator count
-    this.orchestratorCount = number;
-
-    // Generate unique ID for this orchestrator
-    const orchId = `orch-${Date.now()}`;
-
-    // Create abort controller for this session
-    const abortController = new AbortController();
-
-    // Create callbacks for hooks
-    const orchestratorCallbacks: OrchestratorCallbacks = {
-      onContextUpdate: (_sessionId: string, _percent: number) => {
-        // Context is now tracked via periodic polling (pollAllContexts)
-        // This callback exists for hook compatibility but is unused
-      },
-      onToolUse: (tool: string) => {
-        // Increment tool count on the session
-        if (this.currentOrchestratorSession) {
-          this.currentOrchestratorSession.toolCallCount++;
-          const newCount = this.currentOrchestratorSession.toolCallCount;
-
-          // Update state and notify callback
-          updateOrchestratorTool(this.state, tool, newCount);
-          this.callbacks.onToolUse(tool, newCount);
-
-          // Log tool use to debug (logbook) with orchestrator context
-          const conjuringLabel = `Conjuring ${toRoman(number)}`;
-          this.callbacks.onDebugLog?.({
-            type: 'tool',
-            speaker: conjuringLabel,
-            text: `[Tool] ${tool}`,
-            details: { tool, count: newCount },
-          });
-        }
-      },
-    };
-
-    // Create hooks for tool use tracking
-    // Context is now tracked via polling, not hooks
-    const hooks = createOrchestratorHooks(
-      orchestratorCallbacks,
-      // Context percent getter - returns state value (updated by polling)
-      (_sessionId: string) => this.state.currentOrchestrator?.contextPercent || 0,
-    );
-
-    // Create options using helper with resume
-    const options = this.createOrchestratorOptions(hooks, abortController, sessionId);
-
-    // Create the orchestrator query with paired context poller
-    const [orchestratorQuery, pollContext] = createQueryWithPoller(
-      '[System: Session resumed. Continue where you left off.]',
-      options,
-    );
-
-    // Create the full OrchestratorSession object
-    // Note: sessionId is already known from the saved session
-    this.currentOrchestratorSession = {
-      id: orchId,
-      number,
-      sessionId: sessionId, // Already known, don't set to empty string
+      sessionId: resumeSessionId ?? '', // Known if resuming, will be set from init message if new
       query: orchestratorQuery,
       abortController,
       toolCallCount: 0,
@@ -995,7 +894,7 @@ Take your time. This phase determines everything that follows.`
     // Set up TUI-facing orchestrator state
     setCurrentOrchestrator(this.state, {
       id: orchId,
-      sessionId: sessionId,
+      sessionId: resumeSessionId ?? '',
       number,
     });
 
