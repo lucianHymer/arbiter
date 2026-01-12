@@ -3,6 +3,7 @@
 // Main entry point for the Arbiter system
 // Ties together state, router, and TUI for the hierarchical AI orchestration system
 
+import fs from 'node:fs';
 import { Router } from './router.js';
 import { loadSession } from './session-persistence.js';
 import { type AppState, createInitialState } from './state.js';
@@ -14,6 +15,42 @@ import {
   showTitleScreen,
   type TUI,
 } from './tui/index.js';
+
+/**
+ * Get package.json version
+ */
+function getVersion(): string {
+  const pkgPath = new URL('../package.json', import.meta.url);
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'));
+  return pkg.version;
+}
+
+/**
+ * Print help message and exit
+ */
+function printHelp(): void {
+  console.log(`
+arbiter - Hierarchical AI orchestration system
+
+  Consult with the Arbiter, a wise overseer who commands a
+  council of Orchestrators to tackle complex tasks. Each layer
+  extends Claude's context, keeping the work on track. Bring
+  a detailed markdown description of your requirements.
+
+USAGE
+  arbiter [options] [requirements-file]
+
+OPTIONS
+  -h, --help       Show this help message
+  -v, --version    Show version number
+  --resume         Resume from saved session (if <24h old)
+
+EXAMPLES
+  arbiter                   Start fresh session
+  arbiter ./SPEC.md         Start with requirements file (skip in-game prompt)
+  arbiter --resume          Resume previous session
+`);
+}
 
 /**
  * Session information for persistence on exit
@@ -93,6 +130,19 @@ async function main(): Promise<void> {
   try {
     // Parse CLI arguments
     const args = process.argv.slice(2);
+
+    // Handle --help flag (early exit)
+    if (args.includes('--help') || args.includes('-h')) {
+      printHelp();
+      process.exit(0);
+    }
+
+    // Handle --version flag (early exit)
+    if (args.includes('--version') || args.includes('-v')) {
+      console.log(getVersion());
+      process.exit(0);
+    }
+
     const shouldResume = args.includes('--resume');
 
     // Handle --resume flag
@@ -105,7 +155,9 @@ async function main(): Promise<void> {
     }
 
     // Check for positional requirements file argument (first non-flag arg)
-    const positionalArgs = args.filter((arg) => !arg.startsWith('--'));
+    const positionalArgs = args.filter(
+      (arg) => !arg.startsWith('--') && !arg.startsWith('-'),
+    );
     const cliRequirementsFile = positionalArgs[0] || null;
 
     let selectedCharacter: number;
