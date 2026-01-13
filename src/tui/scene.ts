@@ -1,8 +1,9 @@
 /**
- * Scene state and composition module for the Arbiter TUI
+ * Scene composition and rendering module for the Arbiter TUI
  *
- * Manages scene state and creates tile grids for rendering the wizard council scene.
- * The scene shows a human, the arbiter, a spellbook, a campfire, and demons.
+ * Manages scene creation and rendering with sprite-based characters.
+ * The scene shows a static background (grass, trees, cauldron, campfire)
+ * with sprites rendered on top based on their position and animation state.
  */
 
 import {
@@ -17,44 +18,11 @@ import {
   TILE,
   type Tileset,
 } from './tileset.js';
+import { Sprite, type SpriteAnimation } from './sprite.js';
 
 // ============================================================================
 // Types
 // ============================================================================
-
-/**
- * State for a single hop animation at a position
- * Each hop = 500ms (250ms up + 250ms down)
- */
-export interface HopState {
-  remaining: number; // Number of hops left (0 = done)
-  frameInHop: 0 | 1; // 0 = up (hopping), 1 = down (resting)
-}
-
-/**
- * Scene state describing positions and counts of all scene elements
- */
-export interface SceneState {
-  arbiterPos: -1 | 0 | 1 | 2; // -1=off-screen, 0=by scroll, 1=by cauldron, 2=by fire (start)
-  demonCount: number; // 0-5
-  focusTarget: 'human' | 'arbiter' | 'demon' | null;
-  selectedCharacter: number; // Tile index 190-197 for selected human character
-  humanCol: number; // Human character column position (0-6, default 1)
-
-  // Animation state (position-based, not identity-based)
-  activeHops: Map<string, HopState>; // key = "row,col"
-  bubbleVisible: boolean; // Cauldron smoke on/off
-  showSpellbook: boolean; // Arbiter's spellbook visibility
-
-  // Chat bubble indicator - shows over the most recent speaker
-  chatBubbleTarget: 'human' | 'arbiter' | 'conjuring' | null;
-
-  // Alert/exclamation indicator - shows over a character (e.g., arbiter noticing scroll)
-  alertTarget: 'human' | 'arbiter' | 'conjuring' | null;
-
-  // Scroll of requirements visibility
-  scrollVisible: boolean;
-}
 
 /**
  * Tile specification - either a simple tile index or an object with mirroring
@@ -69,7 +37,7 @@ const SCENE_WIDTH = 7;
 const SCENE_HEIGHT = 6;
 
 // Demon spawn positions around the campfire (order matters for spawning)
-const DEMON_POSITIONS = [
+export const DEMON_POSITIONS = [
   { row: 2, col: 6, tile: TILE.DEMON_1 }, // right of fire (first)
   { row: 1, col: 6, tile: TILE.DEMON_2 }, // above-right
   { row: 3, col: 6, tile: TILE.DEMON_3 }, // below-right
@@ -133,89 +101,43 @@ function getTileRender(
 }
 
 // ============================================================================
-// Factory Function
-// ============================================================================
-
-/**
- * Create initial scene state with defaults
- */
-export function createInitialSceneState(): SceneState {
-  return {
-    arbiterPos: 2, // Start by fire (row 3), walks to scroll when first message ready
-    demonCount: 0,
-    focusTarget: null,
-    selectedCharacter: TILE.HUMAN_1,
-    humanCol: 1, // Default position (after entry animation)
-
-    // Animation state
-    activeHops: new Map(),
-    bubbleVisible: false,
-    showSpellbook: false,
-
-    // Chat bubble
-    chatBubbleTarget: null,
-
-    // Alert/exclamation indicator
-    alertTarget: null,
-
-    // Scroll of requirements
-    scrollVisible: false,
-  };
-}
-
-// ============================================================================
 // Scene Creation
 // ============================================================================
 
 /**
- * Create a 7x6 grid of tile specifications based on scene state
+ * Create a 7x6 grid of tile specifications based on sprites
  *
  * Scene Layout:
  * - Row 0-1: Trees on edges (col 0 and 6), grass elsewhere
- * - Row 2: Human at col 1, Arbiter at col 2-4 (based on arbiterPos), Cauldron at col 5, tree at col 6
+ * - Row 2: Human at col 1, Arbiter at col 2-4 (based on position), Cauldron at col 5, tree at col 6
  * - Row 3: Tree at col 0, grass, campfire at col 5, tree at col 6
  * - Row 4-5: Trees at col 0 and 6, grass elsewhere
  * - Demons spawn around campfire at col 5-6, rows 1-3
  * - Smoke bubbles appear above cauldron when working
  * - Spellbook appears to the left of arbiter when at position 2
+ *
+ * Note: Characters (human, arbiter, demons) are rendered via sprites,
+ * so they don't appear in the background tile grid.
+ *
+ * @param sprites - Array of Sprites to include in the scene
  */
-export function createScene(state: SceneState): TileSpec[][] {
-  const {
-    arbiterPos,
-    demonCount,
-    selectedCharacter,
-    humanCol,
-    bubbleVisible,
-    showSpellbook,
-    scrollVisible,
-  } = state;
-  // arbiterPos -1 means off-screen (not visible)
-  const arbiterVisible = arbiterPos >= 0;
-
-  // Position mapping:
-  // Pos 2: row 3, col 4 (by fire - starting position)
-  // Pos 1: row 2, col 4 (by cauldron)
-  // Pos 0: row 2, col 3 (by scroll - final position)
-  let arbiterCol = -1;
-  let arbiterRow = 2;
-  if (arbiterVisible) {
-    switch (arbiterPos) {
-      case 0:
-        arbiterCol = 3;
-        arbiterRow = 2;
-        break;
-      case 1:
-        arbiterCol = 4;
-        arbiterRow = 2;
-        break;
-      case 2:
-        arbiterCol = 4;
-        arbiterRow = 3;
-        break;
-    }
-  }
-
+export function createScene(sprites: Sprite[]): TileSpec[][] {
   const scene: TileSpec[][] = [];
+
+  // Find scroll sprite to check visibility
+  const scrollSprite = sprites.find((s) => s.id === 'scroll');
+  const scrollVisible = scrollSprite?.visible ?? false;
+
+  // Find spellbook sprite to check visibility
+  const spellbookSprite = sprites.find((s) => s.id === 'spellbook');
+  const spellbookVisible = spellbookSprite?.visible ?? false;
+
+  // Find smoke sprite to check visibility (based on bubbling animation)
+  const smokeSprite = sprites.find((s) => s.id === 'smoke');
+  const smokeVisible =
+    smokeSprite?.visible &&
+    smokeSprite?.animation?.type === 'bubbling' &&
+    (smokeSprite.animation as Extract<SpriteAnimation, { type: 'bubbling' }>).showing;
 
   for (let row = 0; row < SCENE_HEIGHT; row++) {
     const sceneRow: TileSpec[] = [];
@@ -237,19 +159,13 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = TILE.PINE_TREE;
       }
 
-      // Human character on row 2 at humanCol position
-      if (row === 2 && col === humanCol && humanCol >= 0 && humanCol < SCENE_WIDTH) {
-        tile = selectedCharacter;
-      }
-
       // Scroll of requirements (row 2, col 2) - between human and arbiter
       if (scrollVisible && row === 2 && col === 2) {
         tile = TILE.SCROLL;
       }
 
       // Spellbook at row 4, col 4 (one down and left from campfire)
-      // Shows when explicitly set (during arbiter's working position)
-      if (showSpellbook && row === 4 && col === 4) {
+      if (spellbookVisible && row === 4 && col === 4) {
         tile = TILE.SPELLBOOK;
       }
 
@@ -258,27 +174,14 @@ export function createScene(state: SceneState): TileSpec[][] {
         tile = TILE.CAULDRON;
       }
 
-      // Smoke/bubbles above cauldron when bubbleVisible is true
-      if (bubbleVisible && row === 1 && col === 5) {
+      // Smoke/bubbles above cauldron when visible
+      if (smokeVisible && row === 1 && col === 5) {
         tile = TILE.SMOKE;
       }
 
       // Campfire (row 3, col 5)
       if (row === 3 && col === 5) {
         tile = TILE.CAMPFIRE;
-      }
-
-      // Arbiter - only draw if visible (arbiterPos >= 0)
-      if (arbiterVisible && row === arbiterRow && col === arbiterCol) {
-        tile = TILE.ARBITER;
-      }
-
-      // Demons based on count (spawn in order)
-      for (let i = 0; i < Math.min(demonCount, DEMON_POSITIONS.length); i++) {
-        const dp = DEMON_POSITIONS[i];
-        if (row === dp.row && col === dp.col) {
-          tile = dp.tile;
-        }
       }
 
       sceneRow.push(tile);
@@ -292,35 +195,6 @@ export function createScene(state: SceneState): TileSpec[][] {
 // ============================================================================
 // Scene Rendering
 // ============================================================================
-
-/**
- * Get the row,col position for a chat bubble target
- */
-function getChatBubblePosition(
-  state: SceneState,
-  target: 'human' | 'arbiter' | 'conjuring',
-): { row: number; col: number } {
-  switch (target) {
-    case 'human':
-      return { row: 2, col: state.humanCol };
-    case 'arbiter': {
-      const pos = state.arbiterPos;
-      switch (pos) {
-        case 0:
-          return { row: 2, col: 3 }; // By scroll
-        case 1:
-          return { row: 2, col: 4 }; // By cauldron
-        case 2:
-          return { row: 3, col: 4 }; // By fire
-        default:
-          return { row: 2, col: 3 };
-      }
-    }
-    case 'conjuring':
-      // First demon position
-      return { row: 2, col: 6 };
-  }
-}
 
 // Cache for the chat bubble quarter tile (extracted once, reused)
 let chatBubbleQuarterCache: RGB[][] | null = null;
@@ -354,43 +228,35 @@ function getAlertQuarter(tileset: Tileset): RGB[][] {
  * Render the scene to an ANSI string
  *
  * @param tileset - The loaded tileset
- * @param scene - The tile grid from createScene
- * @param activeHops - Map of "row,col" -> HopState for positions that should hop
- * @param sceneState - Optional scene state for chat bubble rendering
+ * @param background - The tile grid from createScene
+ * @param sprites - Array of Sprites to render on top of the background
  */
 export function renderScene(
   tileset: Tileset,
-  scene: TileSpec[][],
-  activeHops: Map<string, HopState> = new Map(),
-  sceneState?: SceneState,
+  background: TileSpec[][],
+  sprites: Sprite[],
 ): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
 
-  // Determine chat bubble position if target is set
-  let bubbleRow = -1;
-  let bubbleCol = -1;
-  if (sceneState?.chatBubbleTarget) {
-    const pos = getChatBubblePosition(sceneState, sceneState.chatBubbleTarget);
-    bubbleRow = pos.row;
-    bubbleCol = pos.col;
-  }
+  // Build a map of sprite positions for quick lookup
+  // Only include visible sprites, excluding special sprites handled in background
+  const spriteMap = new Map<string, Sprite>();
+  const specialSpriteIds = new Set(['scroll', 'spellbook', 'smoke']);
 
-  // Determine alert/exclamation position if target is set
-  let alertRow = -1;
-  let alertCol = -1;
-  if (sceneState?.alertTarget) {
-    const pos = getChatBubblePosition(sceneState, sceneState.alertTarget);
-    alertRow = pos.row;
-    alertCol = pos.col;
+  for (const sprite of sprites) {
+    if (sprite.visible && !specialSpriteIds.has(sprite.id)) {
+      const key = `${sprite.position.row},${sprite.position.col}`;
+      spriteMap.set(key, sprite);
+    }
   }
 
   const renderedTiles: string[][][] = [];
 
-  for (let row = 0; row < scene.length; row++) {
+  for (let row = 0; row < background.length; row++) {
     const renderedRow: string[][] = [];
-    for (let col = 0; col < scene[row].length; col++) {
-      const tileSpec = scene[row][col];
+    for (let col = 0; col < background[row].length; col++) {
+      const tileSpec = background[row][col];
       let tileIndex: number;
       let mirrored = false;
 
@@ -401,79 +267,86 @@ export function renderScene(
         mirrored = tileSpec.mirrored;
       }
 
-      // Check if this position needs an overlay (chat bubble or alert)
-      const needsBubble = row === bubbleRow && col === bubbleCol;
-      const needsAlert = row === alertRow && col === alertCol;
+      // Check if there's a sprite at this position
+      const posKey = `${row},${col}`;
+      const sprite = spriteMap.get(posKey);
 
-      if (needsBubble || needsAlert) {
-        // Render without cache, adding the overlay
-        let pixels = extractTile(tileset, tileIndex);
+      if (sprite) {
+        // Determine which tile to render for the sprite
+        let spriteTile = sprite.tile;
+        const anim = sprite.animation;
+
+        // Handle magic animations - show smoke tile instead
+        if (
+          anim &&
+          (anim.type === 'magicSpawn' || anim.type === 'magicDespawn' || anim.type === 'magicTransform')
+        ) {
+          spriteTile = TILE.SMOKE;
+        }
+
+        // Render sprite tile with potential indicator overlays
+        let pixels = extractTile(tileset, spriteTile);
 
         // Composite on grass if needed
-        if (tileIndex >= 80) {
+        if (spriteTile >= 80) {
           pixels = compositeTiles(pixels, grassPixels, 1);
         }
 
-        if (mirrored) {
-          pixels = mirrorTile(pixels);
-        }
-
         // Add chat bubble to top-right corner
-        if (needsBubble) {
+        if (sprite.indicator === 'chat') {
           const bubbleQuarter = getChatBubbleQuarter(tileset);
           pixels = compositeQuarterTile(pixels, bubbleQuarter, 'top-right', 1);
         }
 
         // Add alert/exclamation to top-left corner
-        if (needsAlert) {
+        if (sprite.indicator === 'alert') {
           const alertQuarter = getAlertQuarter(tileset);
           pixels = compositeQuarterTile(pixels, alertQuarter, 'top-left', 1);
         }
 
         renderedRow.push(renderTile(pixels));
       } else {
-        // Use cached render
+        // Use cached render for background tiles
         renderedRow.push(getTileRender(tileset, grassPixels, tileIndex, mirrored));
       }
     }
     renderedTiles.push(renderedRow);
   }
 
-  // Build output string
-  // Hop detection now uses activeHops map - check if position is hopping and in "up" frame
-  // When hopping, we need to shift the hopping tile up by 1 row
-  // This means: at the row above, we show the bottom row of the hopping tile
-  // and at the tile's normal position, we show rows shifted up
+  // Build output string with hopping animation support
+  // When a sprite is hopping (frame 0), shift its render up by 1 row
   const lines: string[] = [];
-  for (let tileRow = 0; tileRow < scene.length; tileRow++) {
+  for (let tileRow = 0; tileRow < background.length; tileRow++) {
     for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
       let line = '';
-      for (let tileCol = 0; tileCol < scene[tileRow].length; tileCol++) {
-        // Check if this position is hopping (and in "up" frame)
-        const hopKey = `${tileRow},${tileCol}`;
-        const hopState = activeHops.get(hopKey);
-        const isHoppingTile = hopState && hopState.frameInHop === 0;
+      for (let tileCol = 0; tileCol < background[tileRow].length; tileCol++) {
+        // Check if there's a hopping sprite at this position
+        const posKey = `${tileRow},${tileCol}`;
+        const sprite = spriteMap.get(posKey);
+        const isHoppingUp =
+          sprite?.animation?.type === 'hopping' &&
+          (sprite.animation as Extract<SpriteAnimation, { type: 'hopping' }>).frame === 0;
 
-        // Check if tile above is hopping (for the overflow effect)
-        const hopKeyBelow = `${tileRow + 1},${tileCol}`;
-        const hopStateBelow = activeHops.get(hopKeyBelow);
-        const isTileAboveHopping = hopStateBelow && hopStateBelow.frameInHop === 0;
+        // Check if tile below has a hopping sprite (for overflow effect)
+        const posKeyBelow = `${tileRow + 1},${tileCol}`;
+        const spriteBelow = spriteMap.get(posKeyBelow);
+        const isTileBelowHopping =
+          spriteBelow?.animation?.type === 'hopping' &&
+          (spriteBelow.animation as Extract<SpriteAnimation, { type: 'hopping' }>).frame === 0;
 
-        if (isHoppingTile) {
+        if (isHoppingUp) {
           // For the hopping tile, show the row below (shifted up)
-          // If charRow is 0, we show nothing special (already handled by tile above)
-          // Otherwise show charRow - 1 if we're hopping, but we need to handle the overlap
           if (charRow === 0) {
             // First char row of hopping tile shows second row of the tile
             line += renderedTiles[tileRow][tileCol][1];
           } else if (charRow === CHAR_HEIGHT - 1) {
             // Last char row shows grass (the tile has moved up)
-            line += renderedTiles[tileRow][tileCol][charRow]; // Actually show grass from tile
+            line += renderedTiles[tileRow][tileCol][charRow];
           } else {
             // Show the next row down (shifted up by 1)
             line += renderedTiles[tileRow][tileCol][charRow + 1];
           }
-        } else if (isTileAboveHopping) {
+        } else if (isTileBelowHopping) {
           // For the tile above the hopping tile, the last row shows the first row of the hopping tile
           if (charRow === CHAR_HEIGHT - 1) {
             line += renderedTiles[tileRow + 1][tileCol][0];

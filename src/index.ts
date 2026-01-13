@@ -15,6 +15,8 @@ import {
   showTitleScreen,
   type TUI,
 } from './tui/index.js';
+import { getAllSprites } from './tui/animation-loop.js';
+import { TILE } from './tui/tileset.js';
 
 /**
  * Get package.json version
@@ -41,14 +43,16 @@ USAGE
   arbiter [options] [requirements-file]
 
 OPTIONS
-  -h, --help       Show this help message
-  -v, --version    Show version number
-  --resume         Resume from saved session (if <24h old)
+  -h, --help           Show this help message
+  -v, --version        Show version number
+  --resume             Resume from saved session (if <24h old)
+  --demo-animations    Run animation demo (skip intro screens and router)
 
 EXAMPLES
   arbiter                   Start fresh session
   arbiter ./SPEC.md         Start with requirements file (skip in-game prompt)
   arbiter --resume          Resume previous session
+  arbiter --demo-animations Run animation demo
 `);
 }
 
@@ -76,6 +80,112 @@ function outputSessionInfo(state: AppState): void {
 
   // Output to stderr so it doesn't interfere with TUI output
   process.stderr.write(`${JSON.stringify(sessionInfo)}\n`);
+}
+
+/**
+ * Helper function to create a delay promise
+ */
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Runs a demo sequence showing all animations
+ * Used when --demo-animations flag is passed
+ */
+async function runDemoSequence(): Promise<void> {
+  // Wait for TUI to fully initialize and sprites to be registered
+  await delay(1500);
+
+  // Get all registered sprites
+  const sprites = getAllSprites();
+  const human = sprites.find((s) => s.id === 'human');
+  const arbiter = sprites.find((s) => s.id === 'arbiter');
+  const scroll = sprites.find((s) => s.id === 'scroll');
+  const spellbook = sprites.find((s) => s.id === 'spellbook');
+  const smoke = sprites.find((s) => s.id === 'smoke');
+  const demons = sprites.filter((s) => s.id.startsWith('demon-'));
+
+  if (!human || !arbiter || !scroll || !spellbook || !smoke) {
+    process.stderr.write('Demo: Failed to find required sprites\n');
+    process.exit(1);
+  }
+
+  // Demo entrance sequence - human walks in
+  await human.walk({ row: 2, col: 1 });
+  await delay(300);
+
+  // Human hops (surprised)
+  await human.hop(2);
+  await delay(300);
+
+  // Arbiter hops (notices visitor)
+  await arbiter.hop(2);
+  await delay(500);
+
+  // Demo scroll drop
+  await scroll.physicalSpawn();
+  await delay(500);
+
+  // Demo arbiter walks to scroll
+  await arbiter.walk({ row: 2, col: 3 });
+  await delay(300);
+
+  // Arbiter notices scroll (alarmed)
+  await arbiter.alarmed(1500);
+  await delay(500);
+
+  // Demo summon sequence - arbiter walks to fire for summoning
+  await arbiter.walk({ row: 3, col: 4 });
+  await delay(300);
+
+  // Spellbook appears
+  await spellbook.physicalSpawn();
+  await delay(500);
+
+  // Demo cauldron bubbling
+  smoke.startBubbling();
+  await delay(1000);
+
+  // Spawn demons one by one with magic effect
+  for (let i = 0; i < Math.min(3, demons.length); i++) {
+    await demons[i].magicSpawn();
+    await delay(500);
+  }
+
+  await delay(1500);
+
+  // Demo hopping while working
+  await arbiter.hop(4);
+  await delay(1000);
+
+  // Demo dismiss sequence
+  for (const demon of demons.filter((d) => d.visible)) {
+    await demon.magicDespawn();
+    await delay(300);
+  }
+
+  // Stop bubbling
+  smoke.stopBubbling();
+  await delay(500);
+
+  // Hide spellbook
+  spellbook.visible = false;
+  await delay(500);
+
+  // Walk back
+  await arbiter.walk({ row: 2, col: 3 });
+  await delay(500);
+
+  // Demo chat indicator
+  await arbiter.chatting(2000);
+  await delay(500);
+
+  // Demo complete - wait a moment then exit
+  await delay(2000);
+
+  // Exit cleanly
+  process.exit(0);
 }
 
 /**
@@ -141,6 +251,41 @@ async function main(): Promise<void> {
     if (args.includes('--version') || args.includes('-v')) {
       console.log(getVersion());
       process.exit(0);
+    }
+
+    // Handle --demo-animations flag (early exit)
+    const demoMode = args.includes('--demo-animations');
+    if (demoMode) {
+      // Demo mode: skip all intro screens and router initialization
+      // Go straight to main TUI with default character and run scripted animation demo
+      state = createInitialState();
+      // Set a requirements path to skip the requirements overlay prompt
+      state.requirementsPath = '/dev/null';
+
+      // Create TUI with default character
+      tui = createTUI(state, TILE.HUMAN_1);
+
+      // Wire TUI exit to shutdown
+      tui.onExit(() => {
+        shutdown(0);
+      });
+
+      // Start TUI (takes over terminal)
+      tui.start();
+
+      // Fire-and-forget the requirements ready callback (skips requirement selection)
+      tui.onRequirementsReady(() => {
+        // No-op since we're not starting the router
+      });
+
+      // Run demo sequence after TUI initializes
+      runDemoSequence();
+
+      // Keep the process running until demo completes
+      await new Promise<void>(() => {
+        // This promise never resolves - demo will exit via process.exit(0)
+      });
+      return;
     }
 
     const shouldResume = args.includes('--resume');

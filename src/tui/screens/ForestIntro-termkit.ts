@@ -8,6 +8,7 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { Sprite } from '../sprite.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -82,8 +83,6 @@ type Phase = 'walking' | 'dead' | 'retreat';
  * State for minimal redraws
  */
 interface ForestState {
-  playerX: number;
-  playerY: number;
   phase: Phase;
   hasSeenSign: boolean;
   hasSeenRat: boolean;
@@ -93,8 +92,8 @@ interface ForestState {
  * Tracker for change detection
  */
 interface ChangeTracker {
-  lastPlayerX: number;
-  lastPlayerY: number;
+  lastPlayerCol: number;
+  lastPlayerRow: number;
   lastPhase: Phase;
   lastShowMessage: boolean;
   lastShowRatMessage: boolean;
@@ -715,6 +714,15 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
   // Load tileset before entering the Promise
   const tileset = await loadTileset();
 
+  // Create player sprite
+  const player = new Sprite({
+    id: 'forest-player',
+    tile: selectedCharacter,
+    position: { row: START_Y, col: START_X },
+    visible: true,
+    controlled: true,
+  });
+
   return new Promise((resolve) => {
     // Initialize terminal
     term.fullscreen(true);
@@ -723,8 +731,6 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
     // State
     const state: ForestState = {
-      playerX: START_X,
-      playerY: START_Y,
       phase: 'walking',
       hasSeenSign: false,
       hasSeenRat: false,
@@ -732,8 +738,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
     // Change tracker for minimal redraws
     const tracker: ChangeTracker = {
-      lastPlayerX: -1,
-      lastPlayerY: -1,
+      lastPlayerCol: -1,
+      lastPlayerRow: -1,
       lastPhase: 'walking',
       lastShowMessage: false,
       lastShowRatMessage: false,
@@ -756,8 +762,9 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
      * Draw the forest scene (only if changed)
      */
     function drawScene() {
-      const showMessage = isNextToSign(state.playerX, state.playerY);
-      const showRatMessage = isNextToRat(state.playerX, state.playerY);
+      const playerPos = player.position;
+      const showMessage = isNextToSign(playerPos.col, playerPos.row);
+      const showRatMessage = isNextToRat(playerPos.col, playerPos.row);
 
       // Track if player has seen the sign or rat
       if (showMessage) {
@@ -769,8 +776,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
       // Check if anything changed
       if (
-        state.playerX === tracker.lastPlayerX &&
-        state.playerY === tracker.lastPlayerY &&
+        playerPos.col === tracker.lastPlayerCol &&
+        playerPos.row === tracker.lastPlayerRow &&
         state.phase === tracker.lastPhase &&
         showMessage === tracker.lastShowMessage &&
         showRatMessage === tracker.lastShowRatMessage
@@ -782,8 +789,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       const signDialogueJustAppeared = showMessage && !tracker.lastShowMessage;
       const ratDialogueJustAppeared = showRatMessage && !tracker.lastShowRatMessage;
 
-      tracker.lastPlayerX = state.playerX;
-      tracker.lastPlayerY = state.playerY;
+      tracker.lastPlayerCol = playerPos.col;
+      tracker.lastPlayerRow = playerPos.row;
       tracker.lastPhase = state.phase;
       tracker.lastShowMessage = showMessage;
       tracker.lastShowRatMessage = showRatMessage;
@@ -797,9 +804,9 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
       const sceneLines = renderForestScene(
         tileset,
-        selectedCharacter,
-        state.playerX,
-        state.playerY,
+        player.tile,
+        playerPos.col,
+        playerPos.row,
       );
 
       // Write scene lines
@@ -982,18 +989,26 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
       // Walking phase - handle arrow key movement
       if (state.phase === 'walking') {
-        let newX = state.playerX;
-        let newY = state.playerY;
-
-        if (key === 'UP' || key === 'k') newY--;
-        if (key === 'DOWN' || key === 'j') newY++;
-        if (key === 'LEFT' || key === 'h') newX--;
-        if (key === 'RIGHT' || key === 'l') newX++;
+        // Determine direction from key press
+        let direction: 'up' | 'down' | 'left' | 'right' | null = null;
+        if (key === 'UP' || key === 'k') direction = 'up';
+        else if (key === 'DOWN' || key === 'j') direction = 'down';
+        else if (key === 'LEFT' || key === 'h') direction = 'left';
+        else if (key === 'RIGHT' || key === 'l') direction = 'right';
 
         // No movement key pressed
-        if (newX === state.playerX && newY === state.playerY) {
+        if (direction === null) {
           return;
         }
+
+        const currentPos = player.position;
+        let newX = currentPos.col;
+        let newY = currentPos.row;
+
+        if (direction === 'up') newY--;
+        else if (direction === 'down') newY++;
+        else if (direction === 'left') newX--;
+        else if (direction === 'right') newX++;
 
         // Check if trying to move off screen
         if (isOffScreen(newX, newY)) {
@@ -1026,10 +1041,8 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
           return;
         }
 
-        // Valid move - update position
-        state.playerX = newX;
-        state.playerY = newY;
-        playSfx('footstep');
+        // Valid move - use sprite's step() method (plays footstep sound internally)
+        player.step(direction);
 
         drawScene();
       }
