@@ -30,6 +30,7 @@ import { registerSprite, startAnimationLoop, stopAnimationLoop, getAllSprites, h
 import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
 import { createLogViewer, type LogViewer } from './logViewer.js';
 import { createRouterCallbacks } from './callbacks.js';
+import { cleanupTerminal } from './terminal-cleanup.js';
 
 // ============================================================================
 // Types
@@ -1936,10 +1937,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     stopAnimationLoop();
     stopAnimation();
-    term.fullscreen(false);
-    term.grabInput(false);
-    term.hideCursor(false);
-    term.styleReset();
+    cleanupTerminal();
 
     // Print session IDs on exit
     console.log('\n\x1b[1mSession IDs:\x1b[0m');

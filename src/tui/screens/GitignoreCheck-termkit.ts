@@ -9,6 +9,7 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import termKit from 'terminal-kit';
+import { cleanupTerminal } from '../terminal-cleanup.js';
 
 const term = termKit.terminal;
 
@@ -147,9 +148,7 @@ export async function checkGitignore(): Promise<void> {
      */
     function cleanup() {
       term.removeAllListeners('key');
-      term.grabInput(false);
-      term.fullscreen(false);
-      term.hideCursor(false);
+      cleanupTerminal();
     }
 
     /**

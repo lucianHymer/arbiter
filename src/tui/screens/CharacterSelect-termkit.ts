@@ -8,6 +8,7 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { cleanupTerminal } from '../terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -217,9 +218,7 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
      */
     function cleanup() {
       term.removeAllListeners('key');
-      term.grabInput(false);
-      term.fullscreen(false);
-      term.hideCursor(false);
+      cleanupTerminal();
     }
 
     // Initial draw

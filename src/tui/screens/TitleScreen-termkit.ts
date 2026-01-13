@@ -7,6 +7,7 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { cleanupTerminal } from '../terminal-cleanup.js';
 
 const term = termKit.terminal;
 
@@ -128,9 +129,7 @@ export async function showTitleScreen(): Promise<void> {
      */
     function cleanup() {
       term.removeAllListeners('key');
-      term.grabInput(false);
-      term.fullscreen(false);
-      term.hideCursor(false);
+      cleanupTerminal();
     }
 
     // Handle any key press

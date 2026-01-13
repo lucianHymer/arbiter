@@ -9,6 +9,7 @@
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
 import { Sprite } from '../sprite.js';
+import { cleanupTerminal } from '../terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -951,9 +952,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
      */
     function cleanup() {
       term.removeAllListeners('key');
-      term.grabInput(false);
-      term.fullscreen(false);
-      term.hideCursor(false);
+      cleanupTerminal();
     }
 
     // Initial draw
