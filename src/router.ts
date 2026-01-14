@@ -2,6 +2,7 @@
 // Handles Arbiter and Orchestrator session lifecycle and message routing
 
 import type {
+  CanUseTool,
   HookCallbackMatcher,
   HookEvent,
   Options,
@@ -90,6 +91,7 @@ const ARBITER_ALLOWED_TOOLS = [
   'WebSearch',
   'WebFetch',
   'Task', // For Explore subagent only
+  'mcp__mim__remember',
 ] as const;
 
 // Orchestrator's allowed tools: full tool access for work
@@ -103,7 +105,55 @@ const ORCHESTRATOR_ALLOWED_TOOLS = [
   'Task',
   'WebSearch',
   'WebFetch',
+  'mcp__mim__remember',
 ] as const;
+
+// canUseTool for Arbiter - read-only manager, guides toward spawning orchestrators
+const arbiterCanUseTool: CanUseTool = async (toolName, input) => {
+  // Write operations should be delegated to orchestrators
+  if (toolName === 'Write' || toolName === 'Edit' || toolName === 'NotebookEdit') {
+    return {
+      behavior: 'deny',
+      message:
+        'You cannot write files directly. Use mcp__arbiter-tools__spawn_orchestrator to delegate implementation work to an Orchestrator.',
+    };
+  }
+
+  // No AskUserQuestion tool - just ask in your message text instead
+  if (toolName === 'AskUserQuestion') {
+    return {
+      behavior: 'deny',
+      message:
+        'This tool is not available. If you need to ask the user something, just ask in your message.',
+    };
+  }
+
+  // No plan mode
+  if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
+    return { behavior: 'deny', message: 'Plan mode is not available.' };
+  }
+
+  return { behavior: 'allow', updatedInput: input };
+};
+
+// canUseTool for Orchestrator - full access except user interaction
+const orchestratorCanUseTool: CanUseTool = async (toolName, input) => {
+  // No AskUserQuestion tool - just ask in your message text instead
+  if (toolName === 'AskUserQuestion') {
+    return {
+      behavior: 'deny',
+      message:
+        'This tool is not available. If you need to ask something, just ask in your message.',
+    };
+  }
+
+  // No plan mode
+  if (toolName === 'EnterPlanMode' || toolName === 'ExitPlanMode') {
+    return { behavior: 'deny', message: 'Plan mode is not available.' };
+  }
+
+  return { behavior: 'allow', updatedInput: input };
+};
 
 import type { AppState } from './state.js';
 import {
@@ -686,9 +736,9 @@ export class Router {
       mcpServers: this.arbiterMcpServer ? { 'arbiter-tools': this.arbiterMcpServer } : undefined,
       hooks: this.arbiterHooks ?? undefined,
       abortController: this.arbiterAbortController ?? new AbortController(),
-      permissionMode: 'bypassPermissions',
       settingSources: ['project'], // Load CLAUDE.md for project context
       allowedTools: [...ARBITER_ALLOWED_TOOLS],
+      canUseTool: arbiterCanUseTool,
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     };
   }
@@ -709,9 +759,9 @@ export class Router {
       systemPrompt: ORCHESTRATOR_SYSTEM_PROMPT,
       hooks,
       abortController,
-      permissionMode: 'bypassPermissions',
       settingSources: ['project'], // Load CLAUDE.md for project context
       allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
+      canUseTool: orchestratorCanUseTool,
       outputFormat: {
         type: 'json_schema',
         schema: orchestratorOutputJsonSchema,
