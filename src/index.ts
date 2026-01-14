@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import { Router } from './router.js';
 import { loadSession } from './session-persistence.js';
-import { startMusic } from './sound.js';
+import { disableAllSound, startMusic } from './sound.js';
 import { type AppState, createInitialState } from './state.js';
 import { getAllSprites } from './tui/animation-loop.js';
 import {
@@ -47,6 +47,7 @@ OPTIONS
   -h, --help           Show this help message
   -v, --version        Show version number
   --resume             Resume from saved session (if <24h old)
+  --sound-off          Start with music and sound effects disabled
   --demo-animations    Run animation demo (skip intro screens and router)
 
 EXAMPLES
@@ -285,6 +286,12 @@ async function main(): Promise<void> {
     }
 
     const shouldResume = args.includes('--resume');
+    const soundOff = args.includes('--sound-off');
+
+    // Handle --sound-off flag
+    if (soundOff) {
+      disableAllSound();
+    }
 
     // Handle --resume flag
     let savedSession = null;

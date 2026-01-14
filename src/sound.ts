@@ -164,3 +164,12 @@ export function isMusicEnabled(): boolean {
 export function isSfxEnabled(): boolean {
   return soundState.sfxEnabled;
 }
+
+/**
+ * Disable all sound (music and sfx)
+ * Used for --sound-off CLI flag
+ */
+export function disableAllSound(): void {
+  soundState.musicEnabled = false;
+  soundState.sfxEnabled = false;
+}
