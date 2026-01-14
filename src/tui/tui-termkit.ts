@@ -1752,9 +1752,27 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Entrance complete
     entranceComplete = true;
+
+    // If we have requirements, show the "examines scroll" message
+    if (appState.requirementsPath) {
+      addMessage('system', 'The arbiter examines your scroll of requirements...');
+    }
+
     if (pendingArbiterMessage) {
       addMessage('arbiter', pendingArbiterMessage);
       pendingArbiterMessage = null;
+    }
+
+    // If we're already waiting (arbiter started before entrance finished),
+    // trigger the animations now
+    if (state.waitingFor !== 'none') {
+      const target = state.waitingFor === 'arbiter' ? arbiterSprite : demons[0];
+      if (target) {
+        target.hop(6);
+      }
+      smokeSprite.startBubbling();
+      drawTiles(true);
+      drawChat(true);
     }
   }
 
@@ -2026,10 +2044,11 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   function startWaiting(waitingFor: 'arbiter' | 'orchestrator'): void {
-    // Ignore during entrance sequence
-    if (!entranceComplete) return;
-
+    // Always track waiting state (so chat shows "is working..." after entrance)
     state.waitingFor = waitingFor;
+
+    // Skip animations during entrance sequence
+    if (!entranceComplete) return;
 
     // Hop for 3 seconds (6 hops)
     const target = waitingFor === 'arbiter' ? arbiterSprite : demons[0];

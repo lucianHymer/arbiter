@@ -159,11 +159,12 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
     },
 
     onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
-      // Ignore waiting during entrance sequence - don't want arbiter hopping early
-      if (!isEntranceComplete()) return;
-
       const state = getState();
+      // Always track waiting state (so chat shows "is working..." after entrance)
       state.waitingFor = waitingFor;
+
+      // Skip animations during entrance sequence - don't want arbiter hopping early
+      if (!isEntranceComplete()) return;
 
       // Hop for 3 seconds (6 hops)
       const target = waitingFor === 'arbiter' ? arbiterSprite : demons[0];
