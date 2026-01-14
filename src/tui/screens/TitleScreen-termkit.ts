@@ -6,9 +6,9 @@
  */
 
 import termKit from 'terminal-kit';
-import { playSfx } from '../../sound.js';
+import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
 import { DIM } from '../constants.js';
-import { cleanupTerminal } from '../terminal-cleanup.js';
+import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import { RESET } from '../tileset.js';
 
 const term = termKit.terminal;
@@ -114,15 +114,28 @@ export async function showTitleScreen(): Promise<void> {
       process.stdout.write(line + RESET);
     }
 
-    // Draw prompt (dim, centered below art)
-    const prompt = 'Press any key to continue...';
-    const promptX = Math.max(1, Math.floor((width - prompt.length) / 2));
-    const promptY = startY + artHeight + 3;
-    term.moveTo(promptX, promptY);
-    process.stdout.write(`${DIM}${prompt}${RESET}`);
+    function drawPromptAndSoundHint() {
+      // Draw prompt (dim, centered below art)
+      const prompt = 'Press any key to continue...';
+      const promptX = Math.max(1, Math.floor((width - prompt.length) / 2));
+      const promptY = startY + artHeight + 3;
+      term.moveTo(promptX, promptY);
+      process.stdout.write(`${DIM}${prompt}${RESET}`);
+
+      // Sound hint in corner - show what pressing will DO
+      const musicOn = isMusicEnabled();
+      const sfxOn = isSfxEnabled();
+      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
+      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
+      const soundHint = `${DIM}${musicLabel}  ${sfxLabel}${RESET}`;
+      term.moveTo(width - 24, height);
+      process.stdout.write(soundHint);
+    }
+
+    drawPromptAndSoundHint();
 
     /**
-     * Cleanup and restore terminal
+     * Cleanup for screen transitions
      */
     function cleanup() {
       term.removeAllListeners('key');
@@ -133,8 +146,21 @@ export async function showTitleScreen(): Promise<void> {
     term.on('key', (key: string) => {
       // Exit on quit keys
       if (key === 'CTRL_C' || key === 'CTRL_Z') {
-        cleanup();
+        term.removeAllListeners('key');
+        exitTerminal();
         process.exit(0);
+      }
+
+      // Sound toggles (don't continue)
+      if (key === 'm') {
+        toggleMusic();
+        drawPromptAndSoundHint();
+        return;
+      }
+      if (key === 's') {
+        toggleSfx();
+        drawPromptAndSoundHint();
+        return;
       }
 
       // Any other key continues to character select

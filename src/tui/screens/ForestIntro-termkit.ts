@@ -7,10 +7,10 @@
  */
 
 import termKit from 'terminal-kit';
-import { playSfx } from '../../sound.js';
+import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
 import { BOLD, BRIGHT_WHITE, DIM } from '../constants.js';
 import { Sprite } from '../sprite.js';
-import { cleanupTerminal } from '../terminal-cleanup.js';
+import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -850,6 +850,19 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
     }
 
     /**
+     * Draw sound hint in bottom-right corner
+     */
+    function drawSoundHint() {
+      const musicOn = isMusicEnabled();
+      const sfxOn = isSfxEnabled();
+      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
+      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
+      const soundHint = `${DIM}${musicLabel}  ${sfxLabel}${RESET}`;
+      term.moveTo(width - 24, height);
+      process.stdout.write(soundHint);
+    }
+
+    /**
      * Draw the death screen
      */
     function drawDeathScreen() {
@@ -949,13 +962,26 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
     // Initial draw
     term.clear();
     drawScene();
+    drawSoundHint();
 
     // Handle keyboard input
     term.on('key', (key: string) => {
       // Quit handling
       if (key === 'q' || key === 'CTRL_C' || key === 'CTRL_Z') {
-        cleanup();
+        term.removeAllListeners('key');
+        exitTerminal();
         process.exit(0);
+      }
+
+      // Sound toggles (work in any phase)
+      if (key === 'm') {
+        toggleMusic();
+        drawSoundHint();
+        return;
+      }
+      if (key === 's') {
+        toggleSfx();
+        drawSoundHint();
         return;
       }
 

@@ -7,9 +7,9 @@
  */
 
 import termKit from 'terminal-kit';
-import { playSfx } from '../../sound.js';
+import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
 import { BOLD, CYAN, DIM, YELLOW } from '../constants.js';
-import { cleanupTerminal } from '../terminal-cleanup.js';
+import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -200,12 +200,19 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
       term.moveTo(Math.max(1, Math.floor((width - characterName.length) / 2)), nameY);
       process.stdout.write(`${BOLD}${CYAN}${characterName}${RESET}`);
 
-      // Instructions at bottom
+      // Instructions at bottom (2 lines)
       const instructionY = nameY + 2;
-      const instructions =
-        '[LEFT/RIGHT or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
-      term.moveTo(Math.max(1, Math.floor((width - instructions.length) / 2)), instructionY);
-      process.stdout.write(`${DIM}${instructions}${RESET}`);
+      const instructions1 =
+        '[←/→ or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
+      const musicOn = isMusicEnabled();
+      const sfxOn = isSfxEnabled();
+      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
+      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
+      const instructions2 = `${musicLabel}   ${sfxLabel}`;
+      term.moveTo(Math.max(1, Math.floor((width - instructions1.length) / 2)), instructionY);
+      process.stdout.write(`${DIM}${instructions1}${RESET}`);
+      term.moveTo(Math.max(1, Math.floor((width - instructions2.length) / 2)), instructionY + 1);
+      process.stdout.write(`${DIM}${instructions2}${RESET}`);
     }
 
     /**
@@ -255,8 +262,17 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
         resolve({ character: CHARACTER_TILES[selectedIndex], skipIntro: true });
       } else if (key === 'q' || key === 'CTRL_C' || key === 'CTRL_Z') {
         // Exit application
-        cleanup();
+        term.removeAllListeners('key');
+        exitTerminal();
         process.exit(0);
+      } else if (key === 'm') {
+        // Toggle music
+        toggleMusic();
+        drawScreen();
+      } else if (key === 's') {
+        // Toggle sound effects
+        toggleSfx();
+        drawScreen();
       }
     });
   });

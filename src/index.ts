@@ -6,7 +6,9 @@
 import fs from 'node:fs';
 import { Router } from './router.js';
 import { loadSession } from './session-persistence.js';
+import { startMusic } from './sound.js';
 import { type AppState, createInitialState } from './state.js';
+import { getAllSprites } from './tui/animation-loop.js';
 import {
   checkGitignore,
   createTUI,
@@ -15,7 +17,6 @@ import {
   showTitleScreen,
   type TUI,
 } from './tui/index.js';
-import { getAllSprites } from './tui/animation-loop.js';
 import { TILE } from './tui/tileset.js';
 
 /**
@@ -300,9 +301,7 @@ async function main(): Promise<void> {
     }
 
     // Check for positional requirements file argument (first non-flag arg)
-    const positionalArgs = args.filter(
-      (arg) => !arg.startsWith('--') && !arg.startsWith('-'),
-    );
+    const positionalArgs = args.filter((arg) => !arg.startsWith('--') && !arg.startsWith('-'));
     const cliRequirementsFile = positionalArgs[0] || null;
 
     let selectedCharacter: number;
@@ -315,6 +314,9 @@ async function main(): Promise<void> {
 
       // Show title screen first (any key continues)
       await showTitleScreen();
+
+      // Start background music after title screen
+      startMusic();
 
       // Check if Arbiter files should be added to .gitignore
       await checkGitignore();

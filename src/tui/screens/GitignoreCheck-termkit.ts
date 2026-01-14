@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import termKit from 'terminal-kit';
 import { DIM, GREEN, YELLOW } from '../constants.js';
-import { cleanupTerminal } from '../terminal-cleanup.js';
+import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import { RESET } from '../tileset.js';
 
 const term = termKit.terminal;
@@ -168,7 +168,8 @@ export async function checkGitignore(): Promise<void> {
     term.on('key', (key: string) => {
       // Exit on quit keys
       if (key === 'CTRL_C' || key === 'CTRL_Z') {
-        cleanup();
+        term.removeAllListeners('key');
+        exitTerminal();
         process.exit(0);
       }
 

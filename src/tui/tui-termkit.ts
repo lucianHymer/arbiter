@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import termKit from 'terminal-kit';
 import type { RouterCallbacks } from '../router.js';
-import { playSfx } from '../sound.js';
+import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../sound.js';
 import type { AppState } from '../state.js';
 import { toRoman } from '../state.js';
 import {
@@ -25,7 +25,7 @@ import { createLogViewer, type LogViewer } from './logViewer.js';
 import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
 import { createScene, renderScene, SCENE_HEIGHT, SCENE_WIDTH } from './scene.js';
 import { Sprite } from './sprite.js';
-import { cleanupTerminal } from './terminal-cleanup.js';
+import { exitTerminal } from './terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -200,7 +200,7 @@ function calculateInputLines(
   };
 }
 
-function getLayout(inputText: string = '') {
+function getLayout(inputText: string = '', mode: 'INSERT' | 'NORMAL' = 'NORMAL') {
   let width = 180;
   let height = 50;
 
@@ -225,10 +225,14 @@ function getLayout(inputText: string = '') {
   const inputTextWidth = chatAreaWidth - 3; // -3 for prompt "> " and cursor space
   const { displayLines: inputLines } = calculateInputLines(inputText, inputTextWidth);
 
+  // Status bar: 1 line in INSERT mode, 2 lines in NORMAL/SCROLL mode
+  const statusLines = mode === 'INSERT' ? 1 : 2;
+
   // Input area at bottom, status bar above it, context bar above that, chat fills remaining space
   const inputY = height - inputLines + 1; // +1 because 1-indexed
-  const statusY = inputY - 1;
-  const contextY = statusY - 1; // Context bar above status
+  const statusY1 = inputY - statusLines; // First (or only) status line
+  const statusY2 = statusLines === 2 ? inputY - 1 : null; // Second line only in NORMAL mode
+  const contextY = statusY1 - 1; // Context bar above status
   const chatAreaY = 1;
   const chatAreaHeight = contextY - 1; // Chat goes up to context bar
 
@@ -256,8 +260,10 @@ function getLayout(inputText: string = '') {
     },
     statusBar: {
       x: chatAreaX,
-      y: statusY,
+      y: statusY1,
+      y2: statusY2,
       width: chatAreaWidth,
+      lines: statusLines,
     },
     inputArea: {
       x: chatAreaX,
@@ -492,7 +498,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
 
     if (!state.tileset) return;
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
 
     // Draw filler rows above the scene (build from scene upward, so cut-off is at top edge)
     const rowsAbove = layout.tileArea.fillerRowsAbove;
@@ -635,7 +641,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastToolCount = state.toolCountSinceLastMessage;
     tracker.lastChatAnimFrame = state.blinkCycle;
 
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const visibleLines = layout.chatArea.height;
 
     // Get rendered lines from single source of truth
@@ -681,7 +687,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastContextPercent = state.arbiterContextPercent;
     tracker.lastOrchestratorPercent = state.orchestratorContextPercent;
 
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const contextX = layout.contextBar.x;
     const contextY = layout.contextBar.y;
 
@@ -714,8 +720,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
-   * Draw status bar - only redraws if mode changed
-   * Shows mode indicator and keyboard hints only (context info is on separate line above)
+   * Draw status bar
+   * INSERT mode: single line
+   * SCROLL mode: two lines with vertical alignment
    */
   function drawStatus(force: boolean = false) {
     // Skip drawing if log viewer or requirements overlay is open
@@ -725,12 +732,20 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (!force && !modeChanged) return;
 
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const statusX = layout.statusBar.x;
-    const statusY = layout.statusBar.y;
+    const statusY1 = layout.statusBar.y;
+    const statusY2 = layout.statusBar.y2;
 
-    // Clear the status line (only chat area width, not the tile scene)
-    term.moveTo(statusX, statusY);
+    // Clear status line(s)
+    // Clear 3 lines to handle mode transitions:
+    // - SCROLL uses 2 lines, INSERT uses 1 line at different positions
+    // - When going SCROLL->INSERT, old SCROLL line 1 is above new INSERT line
+    term.moveTo(statusX, statusY1 - 1);
+    process.stdout.write(' '.repeat(layout.statusBar.width));
+    term.moveTo(statusX, statusY1);
+    process.stdout.write(' '.repeat(layout.statusBar.width));
+    term.moveTo(statusX, statusY1 + 1);
     process.stdout.write(' '.repeat(layout.statusBar.width));
 
     // Exit confirmation mode - show special prompt
@@ -743,26 +758,48 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         exitPrompt += ` | Orch: ${orchSid}`;
       }
       exitPrompt += '\x1b[0m';
-      term.moveTo(statusX, statusY);
+      term.moveTo(statusX, statusY1);
       process.stdout.write(exitPrompt);
       return;
     }
 
-    // Build status line (mode + hints only - context info is now on separate line)
-    let statusLine = '';
+    // DIM color for hints
+    const DIM = '\x1b[38;2;140;140;140m';
+    const RESET = '\x1b[0m';
+
+    // Sound toggle labels: show what pressing the key will DO (toggle to opposite state)
+    const musicOn = isMusicEnabled();
+    const sfxOn = isSfxEnabled();
+    const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
+    const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
 
     if (state.mode === 'INSERT') {
-      statusLine += '\x1b[42;30m INSERT \x1b[0m'; // Green bg, black text
-      statusLine +=
-        '\x1b[38;2;140;140;140m    esc:scroll  ·  \\+enter:newline  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
-    } else {
-      statusLine += '\x1b[48;2;130;44;19m\x1b[97m SCROLL \x1b[0m'; // Brown bg (130,44,19), bright white text
-      statusLine +=
-        '\x1b[38;2;140;140;140m    i:insert  ·  ↑/↓:scroll  ·  o:log  ·  ^C:quit  ·  ^Z:suspend \x1b[0m';
-    }
+      // Single line: mode + hints + system + sound toggles (no m/s functionality in insert)
+      const line =
+        '\x1b[42;30m INSERT \x1b[0m' + // Green bg, black text
+        `${DIM}    esc:scroll [mode]  ·  \\+enter:newline  ·  ^C:quit  ·  ^Z:suspend${RESET}`;
 
-    term.moveTo(statusX, statusY);
-    process.stdout.write(statusLine);
+      term.moveTo(statusX, statusY1);
+      process.stdout.write(line);
+    } else {
+      // Line 1: mode badge + hints starting at col 12 (after " SCROLL " + 4 spaces)
+      // i:insert [mode]  ·  ↑/↓:scroll  ·  ^C:quit  ·  ^Z:suspend
+      const line1 =
+        '\x1b[48;2;130;44;19m\x1b[97m SCROLL \x1b[0m' + // Brown bg, bright white text
+        `${DIM}    i:insert [mode]  ·  ↑/↓:scroll  ·  ^C:quit  ·  ^Z:suspend${RESET}`;
+
+      // Line 2: aligned under the hints (12 chars in: 8 for badge + 4 spaces)
+      // o:log  ·  m:music-off  ·  s:sfx-off
+      const indent = ' '.repeat(12); // 8 (badge) + 4 (spaces)
+      const line2 = `${indent}${DIM}o:log  ·  ${musicLabel}  ·  ${sfxLabel}${RESET}`;
+
+      term.moveTo(statusX, statusY1);
+      process.stdout.write(line1);
+      if (statusY2) {
+        term.moveTo(statusX, statusY2);
+        process.stdout.write(line2);
+      }
+    }
   }
 
   /**
@@ -770,7 +807,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Now supports multi-line input (1-5 lines based on content)
    */
   function drawInput(force: boolean = false) {
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const inputHeight = layout.inputArea.height;
 
     const inputChanged =
@@ -1012,7 +1049,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    */
   function drawTilesForOverlay(): void {
     if (!state.tileset) return;
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
 
     // Draw filler rows above the scene
     const rowsAbove = layout.tileArea.fillerRowsAbove;
@@ -1083,7 +1120,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   requirementsOverlay = createRequirementsOverlay({
     term,
     getTileset: () => state.tileset,
-    getLayout: () => getLayout(state.inputBuffer),
+    getLayout: () => getLayout(state.inputBuffer, state.mode),
     drawTiles: drawTilesForOverlay,
     onFileSelected: onRequirementsFileSelected,
     humanSprite,
@@ -1198,7 +1235,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // system messages don't show a chat bubble
 
     // Auto-scroll to bottom using single source of truth
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const renderedLines = getRenderedChatLines(layout.chatArea.width);
     state.scrollOffset = Math.max(0, renderedLines.length - layout.chatArea.height);
 
@@ -1435,7 +1472,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         break;
 
       case 'UP': {
-        const layout = getLayout(state.inputBuffer);
+        const layout = getLayout(state.inputBuffer, state.mode);
         const textWidth = layout.inputArea.width - 3; // Match drawInput calculation
         const { line, col } = getCursorLineCol(state.inputBuffer, state.cursorPos, textWidth);
 
@@ -1448,7 +1485,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       }
 
       case 'DOWN': {
-        const layout = getLayout(state.inputBuffer);
+        const layout = getLayout(state.inputBuffer, state.mode);
         const textWidth = layout.inputArea.width - 3;
         const { line, col, totalLines } = getCursorLineCol(
           state.inputBuffer,
@@ -1485,7 +1522,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'ENTER': {
         state.mode = 'INSERT';
         // Auto-scroll to bottom when entering insert mode
-        const layoutIns = getLayout(state.inputBuffer);
+        const layoutIns = getLayout(state.inputBuffer, state.mode);
         const renderedLinesIns = getRenderedChatLines(layoutIns.chatArea.width);
         state.scrollOffset = Math.max(0, renderedLinesIns.length - layoutIns.chatArea.height);
         drawChat();
@@ -1516,7 +1553,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       case 'G': {
         // Scroll to bottom using single source of truth
-        const layoutG = getLayout(state.inputBuffer);
+        const layoutG = getLayout(state.inputBuffer, state.mode);
         const renderedLinesG = getRenderedChatLines(layoutG.chatArea.width);
         state.scrollOffset = Math.max(0, renderedLinesG.length - layoutG.chatArea.height);
         drawChat();
@@ -1526,7 +1563,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'b':
       case 'CTRL_B': {
         // Page up (back)
-        const layoutB = getLayout(state.inputBuffer);
+        const layoutB = getLayout(state.inputBuffer, state.mode);
         state.scrollOffset = Math.max(0, state.scrollOffset - layoutB.chatArea.height);
         drawChat();
         break;
@@ -1535,7 +1572,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'f':
       case 'CTRL_F': {
         // Page down (forward)
-        const layoutF = getLayout(state.inputBuffer);
+        const layoutF = getLayout(state.inputBuffer, state.mode);
         const renderedLinesF = getRenderedChatLines(layoutF.chatArea.width);
         const maxScrollF = Math.max(0, renderedLinesF.length - layoutF.chatArea.height);
         state.scrollOffset = Math.min(maxScrollF, state.scrollOffset + layoutF.chatArea.height);
@@ -1546,7 +1583,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'u':
       case 'CTRL_U': {
         // Half page up
-        const layoutU = getLayout(state.inputBuffer);
+        const layoutU = getLayout(state.inputBuffer, state.mode);
         const halfPageU = Math.floor(layoutU.chatArea.height / 2);
         state.scrollOffset = Math.max(0, state.scrollOffset - halfPageU);
         drawChat();
@@ -1556,7 +1593,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'd':
       case 'CTRL_D': {
         // Half page down
-        const layoutD = getLayout(state.inputBuffer);
+        const layoutD = getLayout(state.inputBuffer, state.mode);
         const renderedLinesD = getRenderedChatLines(layoutD.chatArea.width);
         const maxScrollD = Math.max(0, renderedLinesD.length - layoutD.chatArea.height);
         const halfPageD = Math.floor(layoutD.chatArea.height / 2);
@@ -1568,6 +1605,18 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       case 'o':
         // Open debug log viewer
         logViewer.open();
+        break;
+
+      case 'm':
+        // Toggle music
+        toggleMusic();
+        drawStatus(true);
+        break;
+
+      case 's':
+        // Toggle sound effects
+        toggleSfx();
+        drawStatus(true);
         break;
 
       default:
@@ -1956,7 +2005,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     stopAnimationLoop();
     stopAnimation();
-    cleanupTerminal();
+    exitTerminal();
 
     // Print session IDs on exit
     console.log('\n\x1b[1mSession IDs:\x1b[0m');
@@ -2010,7 +2059,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     drawTiles(true);
 
     // Auto-scroll to show the working indicator using single source of truth
-    const layout = getLayout(state.inputBuffer);
+    const layout = getLayout(state.inputBuffer, state.mode);
     const renderedLines = getRenderedChatLines(layout.chatArea.width);
     state.scrollOffset = Math.max(0, renderedLines.length - layout.chatArea.height);
     drawChat(true);

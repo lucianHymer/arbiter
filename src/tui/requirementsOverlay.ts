@@ -10,13 +10,14 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { Fzf } from 'fzf';
 import type { Terminal } from 'terminal-kit';
-import { Sprite } from './sprite.js';
+import type { Sprite } from './sprite.js';
+import { exitTerminal } from './terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   extractTile,
-  renderTile,
   RESET,
   type RGB,
+  renderTile,
   TILE,
   type Tileset,
 } from './tileset.js';
@@ -525,7 +526,7 @@ export function createRequirementsOverlay(deps: RequirementsOverlayDeps) {
             state.tilesDrawn = true;
 
             // Hold smoke for a bit longer
-            await new Promise(r => setTimeout(r, 1100));
+            await new Promise((r) => setTimeout(r, 1100));
 
             // Transform smoke to rat
             await humanSprite.magicTransform(210); // Rat tile
@@ -593,9 +594,9 @@ export function createRequirementsOverlay(deps: RequirementsOverlayDeps) {
         break;
 
       case 'rat-transform':
-        // Any key exits
+        // Any key exits - clean up properly
+        exitTerminal();
         process.exit(0);
-        return true;
     }
 
     return false;
