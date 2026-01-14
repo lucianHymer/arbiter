@@ -21,7 +21,7 @@ Implementation strategy for transient tool indicators in the terminal-kit based 
 Lines 423-440 show EXISTING working indicator:
 - Only shows when `state.waitingFor !== 'none'`
 - Blinking effect: toggles on/off based on `state.blinkCycle % 2`
-- Shows "Arbiter is working...", "Conjuring is working..." with dots animation
+- Shows "Arbiter is working...", "Orchestrator is working..." with dots animation
 - Uses dim color + arbiter/orchestrator colors
 - Renders in chat area, not status bar
 

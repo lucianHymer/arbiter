@@ -573,7 +573,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       renderedLines.push({ text: '', color: COLORS.reset });
     }
     if (state.waitingFor !== 'none') {
-      const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Conjuring';
+      const waiting = state.waitingFor === 'arbiter' ? 'Arbiter' : 'Orchestrator';
       // Animate dots: ., .., ..., blank, repeat (cycles every 4 blink cycles)
       const dotPhase = state.blinkCycle % 4;
       const dots = dotPhase < 3 ? '.'.repeat(dotPhase + 1) : '';
@@ -667,7 +667,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
-   * Draw context bar - shows Arbiter %, Conjuring %, and tool info
+   * Draw context bar - shows Arbiter %, Orchestrator %, and tool info
    */
   function drawContext(force: boolean = false) {
     // Skip drawing if log viewer or requirements overlay is open
@@ -700,7 +700,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Orchestrator context
     if (state.orchestratorContextPercent !== null) {
-      const orchCtx = `  ·  Conjuring: ${state.orchestratorContextPercent.toFixed(1)}%`;
+      const orchCtx = `  ·  Orchestrator: ${state.orchestratorContextPercent.toFixed(1)}%`;
       contextInfo += `\x1b[36m${orchCtx}\x1b[0m`;
     }
 
@@ -1143,7 +1143,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     } else if (msg.speaker === 'arbiter') {
       return 'Arbiter: ';
     } else if (msg.speaker === 'orchestrator' && msg.orchestratorNumber) {
-      return `Conjuring ${toRoman(msg.orchestratorNumber)}: `;
+      return `Orchestrator ${toRoman(msg.orchestratorNumber)}: `;
     } else if (msg.speaker === 'system') {
       return ''; // No prefix for system/narrator messages
     }

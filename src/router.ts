@@ -943,10 +943,10 @@ Take your time. This phase determines everything that follows.`
           this.callbacks.onToolUse(tool, newCount);
 
           // Log tool use to debug (logbook) with orchestrator context
-          const conjuringLabel = `Conjuring ${toRoman(number)}`;
+          const orchestratorLabel = `Orchestrator ${toRoman(number)}`;
           this.callbacks.onDebugLog?.({
             type: 'tool',
-            speaker: conjuringLabel,
+            speaker: orchestratorLabel,
             text: `[Tool] ${tool}`,
             details: { tool, count: newCount },
           });
@@ -968,7 +968,7 @@ Take your time. This phase determines everything that follows.`
     // Choose prompt based on whether resuming or starting fresh
     const prompt = resumeSessionId
       ? '[System: Session resumed. Continue where you left off.]'
-      : 'Introduce yourself and await instructions from the Arbiter.';
+      : `You are Orchestrator ${toRoman(number)}. Introduce yourself and await instructions from the Arbiter.`;
 
     // Create the orchestrator query with paired context poller
     const [orchestratorQuery, pollContext] = createQueryWithPoller(prompt, options);
@@ -1137,17 +1137,16 @@ Take your time. This phase determines everything that follows.`
     const session = this.currentOrchestratorSession;
     const orchNumber = session.number;
     const orchLabel = `Orchestrator ${toRoman(orchNumber)}`;
-    const conjuringLabel = `Conjuring ${toRoman(orchNumber)}`;
     const { expects_response, message } = output;
 
     // Log the message
     addMessage(this.state, orchLabel, message);
-    logChatToFile(conjuringLabel, message);
+    logChatToFile(orchLabel, message);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
       type: 'message',
-      speaker: conjuringLabel,
+      speaker: orchLabel,
       text: message,
       details: { expects_response },
     });
@@ -1497,7 +1496,7 @@ Take your time. This phase determines everything that follows.`
         const speaker =
           agent === 'arbiter'
             ? 'Arbiter'
-            : `Conjuring ${toRoman(this.state.currentOrchestrator?.number ?? 1)}`;
+            : `Orchestrator ${toRoman(this.state.currentOrchestrator?.number ?? 1)}`;
         this.callbacks.onDebugLog?.({
           type: 'tool',
           speaker,

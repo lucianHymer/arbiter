@@ -9,7 +9,7 @@ Arbiter echoing orchestrator messages with "Human: Orchestrator I: ..." prefixes
 ## Root Cause in router.ts
 
 1. `handleOrchestratorOutput()` (lines 437-453):
-   - Correctly calls `onOrchestratorMessage(orchNumber, text)` → TUI shows "Conjuring I: text"
+   - Correctly calls `onOrchestratorMessage(orchNumber, text)` → TUI shows "Orchestrator I: text"
    - BUT ALSO calls `await this.sendToArbiter(\`${orchLabel}: ${text}\`)` which sends to Arbiter
 
 2. `sendToArbiter()` creates a new SDK query with the orchestrator's message as input

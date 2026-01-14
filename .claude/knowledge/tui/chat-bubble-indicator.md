@@ -21,7 +21,7 @@ Added support for 8x8 quarter-tile extraction and compositing:
 ### New State Property
 
 ```typescript
-chatBubbleTarget: 'human' | 'arbiter' | 'conjuring' | null
+chatBubbleTarget: 'human' | 'arbiter' | 'orchestrator' | null
 ```
 
 ### Helper Functions

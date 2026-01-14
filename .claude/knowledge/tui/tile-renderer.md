@@ -27,7 +27,7 @@ Built a working tile-based renderer using Jerom 16x16 Fantasy Tileset, integrate
 - Frame counter cycles 0-3 at 300ms intervals
 - `hopFrame` toggles during first 3 seconds of work
 - `bubbleFrame` uses variable timing after 3 seconds (400-1200ms on, 600-2000ms off)
-- Activated by `workingTarget`: 'arbiter' | 'conjuring' | null
+- Activated by `workingTarget`: 'arbiter' | 'orchestrator' | null
 
 ### Scene State
 

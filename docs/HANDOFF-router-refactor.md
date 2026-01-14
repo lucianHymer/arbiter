@@ -13,7 +13,7 @@ We're refactoring the message routing between Arbiter and Orchestrator sessions 
 
 **The UI shows the Arbiter's conversation:**
 - At first, human is Arbiter's user → label as "You:"
-- Once orchestrator spawns, orchestrator is Arbiter's user → label as "Conjuring I:"
+- Once orchestrator spawns, orchestrator is Arbiter's user → label as "Orchestrator I:"
 - "Arbiter:" = Arbiter's responses
 - The UI is just showing Arbiter's chat with correct labels
 
@@ -85,7 +85,7 @@ this.callbacks.onArbiterMessage(text);  // Always show, let them figure it out
 
 The router should track who the current "user" of Arbiter is:
 - `mode === 'human_to_arbiter'` → user is human → UI labels as "You:"
-- `mode === 'arbiter_to_orchestrator'` → user is orchestrator → UI labels as "Conjuring N:"
+- `mode === 'arbiter_to_orchestrator'` → user is orchestrator → UI labels as "Orchestrator N:"
 
 The UI callbacks already receive this context - just use mode to determine labels instead of parsing text.
 

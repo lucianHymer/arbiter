@@ -42,7 +42,7 @@ type OrchestratorOutput = z.infer<typeof OrchestratorOutputSchema>;
 ## Message Types
 
 ### Expects Response (forward to Arbiter)
-- Orchestrator introductions ("Hello, I'm Conjuring I...")
+- Orchestrator introductions ("Hello, I'm Orchestrator I...")
 - Questions requiring Arbiter input
 - Task completion reports
 - Handoffs back to Arbiter

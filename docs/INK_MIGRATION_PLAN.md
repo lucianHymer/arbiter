@@ -20,10 +20,10 @@ Migrate from blessed to Ink (React for CLIs) to get:
 │                         │                                         │
 │     Full height         │  You: hello                             │
 │     Left side           │  Arbiter: greetings, mortal             │
-│                         │  Conjuring I: task complete             │
+│                         │  Orchestrator I: task complete             │
 │                         │                                         │
 │                         ├─────────────────────────────────────────┤
-│                         │  Arbiter ████░░ 45%  Conjuring ██░░ 23% │
+│                         │  Arbiter ████░░ 45%  Orchestrator ██░░ 23% │
 │                         ├─────────────────────────────────────────┤
 │                         │  > input here_                          │
 └─────────────────────────┴─────────────────────────────────────────┘
@@ -269,7 +269,7 @@ function TileSceneArea() {
    - Speaker colors:
      - Human: green
      - Arbiter: yellow
-     - Conjuring I/II/etc: cyan
+     - Orchestrator I/II/etc: cyan
 3. Auto-scroll to bottom on new message (unless user scrolled up)
 4. Optional: scroll indicator when not at bottom
 
@@ -338,7 +338,7 @@ function TileSceneArea() {
      - Line 3: Tool indicator + [Ctrl+O] Logbook hint
    - Waiting state animations:
      - "Awaiting the Arbiter..." with animated dots
-     - "The conjuring works..." with animated dots
+     - "The orchestrator works..." with animated dots
 2. Port `renderProgressBar` logic from `src/tui/render.ts`
 
 **Acceptance:**
@@ -372,7 +372,7 @@ function TileSceneArea() {
 3. Scene state management:
    - `arbiterPos` (0, 1, or 2)
    - `demonCount` (0-5)
-   - `workingTarget` ('arbiter' | 'conjuring' | null)
+   - `workingTarget` ('arbiter' | 'orchestrator' | null)
    - `selectedCharacter` (tile index)
 4. Wire up existing modules:
    - `tileset.ts` - loadTileset(), renderScene()

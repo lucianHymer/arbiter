@@ -15,7 +15,7 @@ export interface Message {
   id: string;
   /** Who sent the message */
   speaker: Speaker;
-  /** Orchestrator number for orchestrator messages (e.g., 1 for "Conjuring I") */
+  /** Orchestrator number for orchestrator messages (e.g., 1 for "Orchestrator I") */
   orchestratorNumber?: number;
   /** The message text content */
   text: string;

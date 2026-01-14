@@ -30,7 +30,7 @@ Three-layer routing system:
 ```typescript
 type DebugLogEntry = {
   type: 'message' | 'tool' | 'system';
-  speaker?: string;  // 'arbiter', 'human', 'Conjuring I', etc.
+  speaker?: string;  // 'arbiter', 'human', 'Orchestrator I', etc.
   text: string;
   filtered?: boolean;  // For echo filtering
   details?: any;  // Extra data like {tool, count}
@@ -63,7 +63,7 @@ PostToolUse Hook in orchestrator.ts:
 - Increments tool call count in `toolCallCounts` Map
 - Updates state via `updateOrchestratorTool()`
 - Calls `onToolUse` callback with tool name and count
-- Calls `onDebugLog` with type:'tool', speaker:'Conjuring I', details {tool, count}
+- Calls `onDebugLog` with type:'tool', speaker:'Orchestrator I', details {tool, count}
 - Returns context warnings at 70% and 85% thresholds
 
 ## Mode Changes
