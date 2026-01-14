@@ -6,6 +6,7 @@ Quick reference for Claude to load relevant knowledge.
 
 @architecture/tui-integration.md
 @architecture/hierarchical-orchestration.md
+@architecture/intent-based-routing.md
 @architecture/router-design.md
 @architecture/logging-architecture.md
 @architecture/context-calculation.md

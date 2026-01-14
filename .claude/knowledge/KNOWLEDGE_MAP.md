@@ -1,13 +1,14 @@
 # Knowledge Map
 
-*Last updated: 2026-01-11*
+*Last updated: 2026-01-14 17:09*
 
 ## Architecture
 
 System design and component relationships.
 
 - [TUI Integration Architecture](architecture/tui-integration.md) - How TUI connects to Router, state flow, callbacks, TUI bridge pattern, Ink integration, animation system
-- [Hierarchical Orchestration](architecture/hierarchical-orchestration.md) - Core context management design, spawn_orchestrator MCP tool, UI model ("each other's users")
+- [Hierarchical Orchestration](architecture/hierarchical-orchestration.md) - Core context management design, intent-based orchestrator spawning, UI model ("each other's users"), macro-delegation pattern
+- [Intent-Based Routing](architecture/intent-based-routing.md) - Arbiter routing via structured output intents (replaces mode-based routing and MCP tools)
 - [Router Design](architecture/router-design.md) - Message forwarding principles, text tagging removal
 - [Logging Architecture](architecture/logging-architecture.md) - Message flow, debug logging, context tracking, tool use events
 - [Context Calculation](architecture/context-calculation.md) - Session fork polling approach for 100% accurate context tracking

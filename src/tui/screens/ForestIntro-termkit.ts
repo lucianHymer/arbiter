@@ -858,6 +858,9 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
       const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
       const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
       const soundHint = `${DIM}${musicLabel}  ${sfxLabel}${RESET}`;
+      // Clear the area first to prevent trailing characters when label shrinks
+      term.moveTo(width - 24, height);
+      process.stdout.write(' '.repeat(24));
       term.moveTo(width - 24, height);
       process.stdout.write(soundHint);
     }

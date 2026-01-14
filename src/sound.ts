@@ -128,8 +128,9 @@ export function stopMusic(): void {
 export function toggleMusic(): boolean {
   soundState.musicEnabled = !soundState.musicEnabled;
   if (soundState.musicEnabled) {
-    // Resume music if it was playing before
-    if (musicShouldLoop) {
+    // Start music when enabled (either fresh start or resume)
+    musicShouldLoop = true;
+    if (!currentMusicProcess) {
       playMusicTrack();
     }
   } else {

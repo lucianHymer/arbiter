@@ -211,6 +211,27 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
       const instructions2 = `${musicLabel}   ${sfxLabel}`;
       term.moveTo(Math.max(1, Math.floor((width - instructions1.length) / 2)), instructionY);
       process.stdout.write(`${DIM}${instructions1}${RESET}`);
+      // Clear the line first to prevent trailing characters when label shrinks
+      term.moveTo(1, instructionY + 1);
+      process.stdout.write(' '.repeat(width));
+      term.moveTo(Math.max(1, Math.floor((width - instructions2.length) / 2)), instructionY + 1);
+      process.stdout.write(`${DIM}${instructions2}${RESET}`);
+    }
+
+    /**
+     * Draw just the sound toggle hints (for immediate feedback on toggle)
+     */
+    function drawSoundHints() {
+      const nameY = startY + 3 + CHAR_HEIGHT + 2; // tilesStartY + CHAR_HEIGHT + 2
+      const instructionY = nameY + 2;
+      const musicOn = isMusicEnabled();
+      const sfxOn = isSfxEnabled();
+      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
+      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
+      const instructions2 = `${musicLabel}   ${sfxLabel}`;
+      // Clear the line first to prevent trailing characters when label shrinks
+      term.moveTo(1, instructionY + 1);
+      process.stdout.write(' '.repeat(width));
       term.moveTo(Math.max(1, Math.floor((width - instructions2.length) / 2)), instructionY + 1);
       process.stdout.write(`${DIM}${instructions2}${RESET}`);
     }
@@ -268,11 +289,11 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
       } else if (key === 'm') {
         // Toggle music
         toggleMusic();
-        drawScreen();
+        drawSoundHints();
       } else if (key === 's') {
         // Toggle sound effects
         toggleSfx();
-        drawScreen();
+        drawSoundHints();
       }
     });
   });
