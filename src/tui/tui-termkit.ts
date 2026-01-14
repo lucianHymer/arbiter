@@ -105,9 +105,6 @@ interface TUIState {
   // Exit confirmation state
   pendingExit: boolean;
 
-  // Crash tracking
-  crashCount: number;
-
   // Input lock until arbiter speaks
   arbiterHasSpoken: boolean;
 
@@ -303,7 +300,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     blinkCycle: 0,
     waitingFor: 'none',
     pendingExit: false,
-    crashCount: 0,
     arbiterHasSpoken: false,
     drawingEnabled: true,
   };
@@ -709,11 +705,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     }
 
     // Tool info removed - now shown in chat area indicator instead
-
-    // Crash indicator
-    if (state.crashCount > 0) {
-      contextInfo += `  ·  \x1b[31m⚠ ${state.crashCount} crash${state.crashCount > 1 ? 'es' : ''}\x1b[0m`;
-    }
 
     term.moveTo(contextX, contextY);
     process.stdout.write(contextInfo);
@@ -2018,13 +2009,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       console.log(`  Orchestrator: \x1b[36m${appState.currentOrchestrator.sessionId}\x1b[0m`);
     }
     console.log('');
-
-    // Show crash count if any
-    if (appState.crashCount > 0) {
-      console.log(
-        `\n\x1b[33m⚠ Session had ${appState.crashCount} crash${appState.crashCount > 1 ? 'es' : ''} (recovered)\x1b[0m`,
-      );
-    }
 
     isRunning = false;
   }

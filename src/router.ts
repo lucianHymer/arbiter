@@ -1,6 +1,8 @@
 // Message Router - Core component managing sessions and routing messages
 // Handles Arbiter and Orchestrator session lifecycle and message routing
 
+import { appendFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type {
   CanUseTool,
   HookCallbackMatcher,
@@ -19,6 +21,73 @@ import { type PersistedSession, saveSession } from './session-persistence.js';
 // Helper for async delays
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Log file paths (gitignore handled by GitignoreCheck screen on startup)
+const CRASH_LOG_PATH = join(process.cwd(), '.claude', 'arbiter-crash-report.log');
+const CHAT_LOG_PATH = join(process.cwd(), '.claude', 'arbiter-chat-history.log');
+
+/**
+ * Append error details to crash log file.
+ * No filtering - logs everything for debugging.
+ */
+function logCrashToFile(
+  source: 'arbiter' | 'orchestrator',
+  error: unknown,
+  context?: object,
+): void {
+  const timestamp = new Date().toISOString();
+  const errorObj = error as Record<string, unknown>;
+
+  const entry = {
+    timestamp,
+    source,
+    error: {
+      message: errorObj?.message ?? String(error),
+      name: errorObj?.name,
+      code: errorObj?.code,
+      stack: errorObj?.stack,
+      cause: errorObj?.cause,
+    },
+    context,
+    raw: String(error),
+  };
+
+  try {
+    appendFileSync(CRASH_LOG_PATH, `${JSON.stringify(entry, null, 2)}\n---\n`, 'utf8');
+  } catch {
+    // If we can't write, just continue - don't crash over crash logging
+  }
+}
+
+/**
+ * Append chat message to history log file.
+ */
+function logChatToFile(speaker: string, message: string): void {
+  const timestamp = new Date().toISOString();
+  const line = `[${timestamp}] ${speaker}: ${message}\n`;
+
+  try {
+    appendFileSync(CHAT_LOG_PATH, line, 'utf8');
+  } catch {
+    // If we can't write, just continue
+  }
+}
+
+/**
+ * Log session start marker to chat history.
+ * Format allows reading file backwards to find session start.
+ */
+function logSessionStart(sessionId: string, isResume: boolean): void {
+  const timestamp = new Date().toISOString();
+  const marker = isResume ? 'SESSION_RESUME' : 'SESSION_START';
+  const line = `\n=== ${marker} [${timestamp}] session:${sessionId} ===\n\n`;
+
+  try {
+    appendFileSync(CHAT_LOG_PATH, line, 'utf8');
+  } catch {
+    // If we can't write, just continue
+  }
 }
 
 // Retry constants for crash recovery
@@ -81,33 +150,6 @@ function createQueryWithPoller(
   return [q, pollContext];
 }
 
-// Arbiter's allowed tools: MCP tools + read-only exploration
-const ARBITER_ALLOWED_TOOLS = [
-  'mcp__arbiter-tools__spawn_orchestrator',
-  'mcp__arbiter-tools__disconnect_orchestrators',
-  'Read',
-  'Glob',
-  'Grep',
-  'WebSearch',
-  'WebFetch',
-  'Task', // For Explore subagent only
-  'mcp__mim__remember',
-] as const;
-
-// Orchestrator's allowed tools: full tool access for work
-const ORCHESTRATOR_ALLOWED_TOOLS = [
-  'Read',
-  'Write',
-  'Edit',
-  'Bash',
-  'Glob',
-  'Grep',
-  'Task',
-  'WebSearch',
-  'WebFetch',
-  'mcp__mim__remember',
-] as const;
-
 // canUseTool for Arbiter - read-only manager, guides toward spawning orchestrators
 const arbiterCanUseTool: CanUseTool = async (toolName, input) => {
   // Write operations should be delegated to orchestrators
@@ -155,12 +197,11 @@ const orchestratorCanUseTool: CanUseTool = async (toolName, input) => {
   return { behavior: 'allow', updatedInput: input };
 };
 
-import type { AppState } from './state.js';
+import type { AppState, ArbiterIntent } from './state.js';
 import {
   addMessage,
   clearCurrentOrchestrator,
   setCurrentOrchestrator,
-  setMode,
   toRoman,
   updateArbiterContext,
   updateOrchestratorContext,
@@ -187,12 +228,41 @@ const orchestratorOutputJsonSchema = zodToJsonSchema(OrchestratorOutputSchema, {
   $refStrategy: 'none',
 });
 
+/**
+ * Schema for Arbiter structured output
+ * Controls message routing and orchestrator lifecycle
+ */
+const ArbiterOutputSchema = z.object({
+  intent: z
+    .enum([
+      'address_human',
+      'address_orchestrator',
+      'summon_orchestrator',
+      'release_orchestrators',
+      'musings',
+    ])
+    .describe(
+      `What happens with this message and the conversation:
+- address_human: Message to the human, awaiting their response.
+- address_orchestrator: Message to the active orchestrator, awaiting their response.
+- summon_orchestrator: This message is shown to the human. After this, a new Orchestrator awakens and introduces themselves. If an Orchestrator is already active, they are released and replaced.
+- release_orchestrators: Sever all orchestrator connections. This message (and all future messages) go to the human.
+- musings: Thinking aloud. Displayed for context but no response expected.`,
+    ),
+  message: z.string().describe('Your message content'),
+});
+
+type ArbiterOutput = z.infer<typeof ArbiterOutputSchema>;
+
+// Convert to JSON Schema for SDK
+const arbiterOutputJsonSchema = zodToJsonSchema(ArbiterOutputSchema, {
+  $refStrategy: 'none',
+});
+
 import {
   ARBITER_SYSTEM_PROMPT,
-  type ArbiterCallbacks,
   type ArbiterHooksCallbacks,
   createArbiterHooks,
-  createArbiterMcpServer,
 } from './arbiter.js';
 
 import {
@@ -230,8 +300,8 @@ export type RouterCallbacks = {
   onContextUpdate: (arbiterPercent: number, orchestratorPercent: number | null) => void;
   /** Called when a tool is used by the Orchestrator */
   onToolUse: (tool: string, count: number) => void;
-  /** Called when the routing mode changes */
-  onModeChange: (mode: AppState['mode']) => void;
+  /** Called when the Arbiter declares an intent (for visual feedback like walking) */
+  onArbiterIntent?: (intent: ArbiterIntent) => void;
   /** Called when waiting for a response starts */
   onWaitingStart?: (waitingFor: 'arbiter' | 'orchestrator') => void;
   /** Called when waiting for a response stops */
@@ -242,8 +312,6 @@ export type RouterCallbacks = {
   onOrchestratorDisconnect?: () => void;
   /** Called for ALL events for debug logging (logbook) - includes filtered messages */
   onDebugLog?: (entry: DebugLogEntry) => void;
-  /** Called when crash count changes (for TUI status display) */
-  onCrashCountUpdate?: (count: number) => void;
 };
 
 // Maximum context window size (200K tokens)
@@ -448,18 +516,14 @@ export class Router {
   // Track Arbiter tool calls
   private arbiterToolCallCount = 0;
 
-  // Pending orchestrator spawn flag
+  // Pending orchestrator spawn flag (set by structured output intent)
   private pendingOrchestratorSpawn: boolean = false;
-  private pendingOrchestratorNumber: number = 0;
 
   // Abort controllers for graceful shutdown
   private arbiterAbortController: AbortController | null = null;
 
   // Watchdog timer for orchestrator inactivity detection
   private watchdogInterval: NodeJS.Timeout | null = null;
-
-  // Store MCP server for Arbiter session resumption
-  private arbiterMcpServer: any = null;
 
   // Store Arbiter hooks for session resumption
   private arbiterHooks: Partial<Record<HookEvent, HookCallbackMatcher[]>> | null = null;
@@ -470,8 +534,8 @@ export class Router {
   // Context polling timer - polls /context once per minute via session forking
   private contextPollInterval: NodeJS.Timeout | null = null;
 
-  // Track crash recovery attempts for TUI display
-  private crashCount = 0;
+  // Track if current session is a resume (for chat log markers)
+  private isResumingSession: boolean = false;
 
   constructor(state: AppState, callbacks: RouterCallbacks) {
     this.state = state;
@@ -561,16 +625,17 @@ export class Router {
 
   /**
    * Send a human message to the system
-   * Routes based on current mode:
-   * - human_to_arbiter: Send directly to Arbiter
-   * - arbiter_to_orchestrator: Flush queue with human interjection framing
+   * Routes based on whether an orchestrator is active:
+   * - No orchestrator: Send directly to Arbiter
+   * - Orchestrator active: Flush queue with human interjection framing
    */
   async sendHumanMessage(text: string): Promise<void> {
     // Log the human message and notify TUI immediately
     addMessage(this.state, 'human', text);
+    logChatToFile('Human', text);
     this.callbacks.onHumanMessage(text);
 
-    if (this.state.mode === 'arbiter_to_orchestrator' && this.currentOrchestratorSession) {
+    if (this.currentOrchestratorSession) {
       const session = this.currentOrchestratorSession;
 
       // Human interjection during orchestrator work - flush queue with context
@@ -589,7 +654,7 @@ export class Router {
       // Send formatted message to Arbiter
       await this.sendToArbiter(formattedMessage);
     } else {
-      // Direct to Arbiter (no orchestrator active or in human_to_arbiter mode)
+      // Direct to Arbiter (no orchestrator active)
       await this.sendToArbiter(text);
     }
   }
@@ -644,23 +709,16 @@ export class Router {
     // 2. Abort the SDK session
     session.abortController.abort();
 
-    // 3. Clear the working indicator (will be added later, safe to call now)
-    // this.callbacks.onWorkingIndicator?.('orchestrator', null);
-
-    // 4. Null out the session
+    // 3. Null out the session
     this.currentOrchestratorSession = null;
 
-    // 5. Update shared state for TUI
+    // 4. Update shared state for TUI
     clearCurrentOrchestrator(this.state);
 
-    // 6. Reset mode
-    setMode(this.state, 'human_to_arbiter');
-    this.callbacks.onModeChange('human_to_arbiter');
-
-    // 7. Update context display (no orchestrator)
+    // 5. Update context display (no orchestrator)
     this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
 
-    // 8. Notify TUI about orchestrator disconnect (for tile scene)
+    // 6. Notify TUI about orchestrator disconnect (for tile scene)
     this.callbacks.onOrchestratorDisconnect?.();
   }
 
@@ -733,12 +791,14 @@ export class Router {
   private createArbiterOptions(resumeSessionId?: string): Options {
     return {
       systemPrompt: ARBITER_SYSTEM_PROMPT,
-      mcpServers: this.arbiterMcpServer ? { 'arbiter-tools': this.arbiterMcpServer } : undefined,
       hooks: this.arbiterHooks ?? undefined,
       abortController: this.arbiterAbortController ?? new AbortController(),
       settingSources: ['project'], // Load CLAUDE.md for project context
-      allowedTools: [...ARBITER_ALLOWED_TOOLS],
       canUseTool: arbiterCanUseTool,
+      outputFormat: {
+        type: 'json_schema',
+        schema: arbiterOutputJsonSchema,
+      },
       ...(resumeSessionId ? { resume: resumeSessionId } : {}),
     };
   }
@@ -760,7 +820,6 @@ export class Router {
       hooks,
       abortController,
       settingSources: ['project'], // Load CLAUDE.md for project context
-      allowedTools: [...ORCHESTRATOR_ALLOWED_TOOLS],
       canUseTool: orchestratorCanUseTool,
       outputFormat: {
         type: 'json_schema',
@@ -771,27 +830,18 @@ export class Router {
   }
 
   /**
-   * Creates and starts the Arbiter session with MCP tools
+   * Creates and starts the Arbiter session with structured output routing
    * @param resumeSessionId - Optional session ID for resuming an existing session
    */
   private async startArbiterSession(resumeSessionId?: string): Promise<void> {
+    // Track if this is a resume for chat log markers
+    this.isResumingSession = !!resumeSessionId;
+
     // Notify that we're waiting for Arbiter
     this.callbacks.onWaitingStart?.('arbiter');
 
     // Create abort controller for this session
     this.arbiterAbortController = new AbortController();
-
-    // Create callbacks for MCP tools
-    const arbiterCallbacks: ArbiterCallbacks = {
-      onSpawnOrchestrator: (orchestratorNumber: number) => {
-        // Store the number to spawn after current processing
-        this.pendingOrchestratorSpawn = true;
-        this.pendingOrchestratorNumber = orchestratorNumber;
-      },
-      onDisconnectOrchestrators: () => {
-        this.cleanupOrchestrator();
-      },
-    };
 
     // Create callbacks for hooks (tool tracking)
     const arbiterHooksCallbacks: ArbiterHooksCallbacks = {
@@ -809,10 +859,6 @@ export class Router {
         });
       },
     };
-
-    // Create MCP server with Arbiter tools
-    const mcpServer = createArbiterMcpServer(arbiterCallbacks, () => this.orchestratorCount);
-    this.arbiterMcpServer = mcpServer;
 
     // Create hooks for tool tracking
     const hooks = createArbiterHooks(arbiterHooksCallbacks);
@@ -948,10 +994,6 @@ Take your time. This phase determines everything that follows.`
       number,
     });
 
-    // Switch mode
-    setMode(this.state, 'arbiter_to_orchestrator');
-    this.callbacks.onModeChange('arbiter_to_orchestrator');
-
     // Notify about orchestrator spawn (for tile scene demon spawning)
     this.callbacks.onOrchestratorSpawn?.(number);
 
@@ -1022,26 +1064,62 @@ Take your time. This phase determines everything that follows.`
   }
 
   /**
-   * Handle Arbiter output based on mode
-   * In arbiter_to_orchestrator mode, forward to Orchestrator
-   * In human_to_arbiter mode, display to human
+   * Handle Arbiter structured output - route based on intent field
+   * The intent determines where the message goes and what state changes occur
    */
-  private async handleArbiterOutput(text: string): Promise<void> {
+  private async handleArbiterOutput(output: ArbiterOutput): Promise<void> {
+    const { intent, message } = output;
+
     // Log the message (always, for history/debug)
-    addMessage(this.state, 'arbiter', text);
+    addMessage(this.state, 'arbiter', message);
+    logChatToFile('Arbiter', message);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
       type: 'message',
       speaker: 'arbiter',
-      text,
+      text: message,
+      details: { intent },
     });
 
-    this.callbacks.onArbiterMessage(text);
+    // Notify TUI for visual feedback (walking to position)
+    this.callbacks.onArbiterIntent?.(intent);
 
-    // If we're in orchestrator mode, forward to the orchestrator
-    if (this.state.mode === 'arbiter_to_orchestrator' && this.state.currentOrchestrator) {
-      await this.sendToOrchestrator(text);
+    // Always display the message to the appropriate audience
+    this.callbacks.onArbiterMessage(message);
+
+    // Handle based on intent
+    switch (intent) {
+      case 'address_human':
+        // Message already displayed, waiting for human response
+        break;
+
+      case 'address_orchestrator':
+        // Forward to the active orchestrator
+        if (this.currentOrchestratorSession) {
+          await this.sendToOrchestrator(message);
+        } else {
+          // No orchestrator active - log warning
+          this.callbacks.onDebugLog?.({
+            type: 'system',
+            text: 'Arbiter tried to address orchestrator but none is active',
+          });
+        }
+        break;
+
+      case 'summon_orchestrator':
+        // Message shown to human, then orchestrator spawns after this turn
+        this.pendingOrchestratorSpawn = true;
+        break;
+
+      case 'release_orchestrators':
+        // Cleanup orchestrator, message goes to human
+        this.cleanupOrchestrator();
+        break;
+
+      case 'musings':
+        // Message displayed, no response expected - nothing more to do
+        break;
     }
   }
 
@@ -1064,6 +1142,7 @@ Take your time. This phase determines everything that follows.`
 
     // Log the message
     addMessage(this.state, orchLabel, message);
+    logChatToFile(conjuringLabel, message);
 
     // Log to debug (logbook)
     this.callbacks.onDebugLog?.({
@@ -1134,21 +1213,23 @@ Take your time. This phase determines everything that follows.`
           }
           // Successfully finished processing
           break;
-        } catch (error: any) {
-          if (error?.name === 'AbortError') {
-            // Silently ignore - this is expected during shutdown
-            return;
-          }
+        } catch (error: unknown) {
+          // Log ALL errors to crash report file - no filtering
+          logCrashToFile('arbiter', error, {
+            retries,
+            sessionId: this.state.arbiterSessionId,
+          });
 
-          // Increment crash count and notify TUI
-          this.crashCount++;
-          this.callbacks.onCrashCountUpdate?.(this.crashCount);
-
-          // Log the error
+          // Also log to debug log
+          const errorObj = error as Record<string, unknown>;
           this.callbacks.onDebugLog?.({
             type: 'system',
-            text: `Arbiter crash #${this.crashCount}, retry ${retries + 1}/${MAX_RETRIES}`,
-            details: { error: error?.message || String(error) },
+            text: `Arbiter error caught, retry ${retries + 1}/${MAX_RETRIES}`,
+            details: {
+              error: errorObj?.message || String(error),
+              name: errorObj?.name,
+              code: errorObj?.code,
+            },
           });
 
           // Check if we've exceeded max retries
@@ -1174,13 +1255,12 @@ Take your time. This phase determines everything that follows.`
       // Stop waiting animation after Arbiter response is complete
       this.callbacks.onWaitingStop?.();
 
-      // Check if we need to spawn an orchestrator
+      // Check if we need to spawn an orchestrator (intent was summon_orchestrator)
       if (this.pendingOrchestratorSpawn) {
-        const number = this.pendingOrchestratorNumber;
         this.pendingOrchestratorSpawn = false;
-        this.pendingOrchestratorNumber = 0;
-
-        await this.startOrchestratorSession(number);
+        // Increment count and spawn with the new number
+        this.orchestratorCount++;
+        await this.startOrchestratorSession(this.orchestratorCount);
       }
     } catch (error) {
       console.error('Error processing Arbiter messages:', error);
@@ -1208,6 +1288,9 @@ Take your time. This phase determines everything that follows.`
           // Capture session ID
           this.state.arbiterSessionId = message.session_id;
 
+          // Log session start marker to chat history
+          logSessionStart(message.session_id, this.isResumingSession);
+
           // Save session for crash recovery
           saveSession(
             message.session_id,
@@ -1218,23 +1301,35 @@ Take your time. This phase determines everything that follows.`
         break;
 
       case 'assistant': {
-        // Extract text content from the assistant message
+        // Track tool use from Arbiter (read-only tools)
         const assistantMessage = message as SDKAssistantMessage;
-
-        // Track tool use from Arbiter (MCP tools like spawn_orchestrator)
         this.trackToolUseFromAssistant(assistantMessage, 'arbiter');
-
-        const textContent = this.extractTextFromAssistantMessage(assistantMessage);
-        if (textContent) {
-          await this.handleArbiterOutput(textContent);
-        }
+        // Note: We don't extract text here anymore - output comes from structured_output
         break;
       }
 
-      case 'result':
-        // Result messages logged for debugging
-        // Context is tracked via periodic polling, not per-message
+      case 'result': {
+        // Handle structured output from successful result messages
+        const resultMessage = message as SDKResultMessage;
+        if (resultMessage.subtype === 'success') {
+          const structuredOutput = (resultMessage as any).structured_output;
+          if (structuredOutput) {
+            // Parse and validate the structured output
+            const parsed = ArbiterOutputSchema.safeParse(structuredOutput);
+            if (parsed.success) {
+              await this.handleArbiterOutput(parsed.data);
+            } else {
+              // Log parsing error but don't crash
+              this.callbacks.onDebugLog?.({
+                type: 'system',
+                text: `Failed to parse arbiter output: ${parsed.error.message}`,
+                details: { structuredOutput, error: parsed.error },
+              });
+            }
+          }
+        }
         break;
+      }
     }
   }
 
@@ -1261,21 +1356,24 @@ Take your time. This phase determines everything that follows.`
         }
         // Successfully finished processing
         break;
-      } catch (error: any) {
-        if (error?.name === 'AbortError') {
-          // Silently ignore - this is expected during shutdown
-          return;
-        }
+      } catch (error: unknown) {
+        // Log ALL errors to crash report file - no filtering
+        logCrashToFile('orchestrator', error, {
+          retries,
+          sessionId: this.currentOrchestratorSession?.sessionId,
+          orchestratorNumber: this.currentOrchestratorSession?.number,
+        });
 
-        // Increment crash count and notify TUI
-        this.crashCount++;
-        this.callbacks.onCrashCountUpdate?.(this.crashCount);
-
-        // Log the error
+        // Also log to debug log
+        const errorObj = error as Record<string, unknown>;
         this.callbacks.onDebugLog?.({
           type: 'system',
-          text: `Orchestrator crash #${this.crashCount}, retry ${retries + 1}/${MAX_RETRIES}`,
-          details: { error: error?.message || String(error) },
+          text: `Orchestrator error caught, retry ${retries + 1}/${MAX_RETRIES}`,
+          details: {
+            error: errorObj?.message || String(error),
+            name: errorObj?.name,
+            code: errorObj?.code,
+          },
         });
 
         // Check if we've exceeded max retries
@@ -1377,33 +1475,6 @@ Take your time. This phase determines everything that follows.`
         break;
       }
     }
-  }
-
-  /**
-   * Extract text content from an assistant message
-   * The message.message.content can be a string or an array of content blocks
-   */
-  private extractTextFromAssistantMessage(message: SDKAssistantMessage): string | null {
-    const content = message.message.content;
-
-    // Handle string content
-    if (typeof content === 'string') {
-      return content;
-    }
-
-    // Handle array of content blocks
-    if (Array.isArray(content)) {
-      const textParts: string[] = [];
-      for (const block of content) {
-        if (block.type === 'text') {
-          textParts.push((block as { type: 'text'; text: string }).text);
-        }
-        // We ignore tool_use blocks here as they're handled separately
-      }
-      return textParts.length > 0 ? textParts.join('\n') : null;
-    }
-
-    return null;
   }
 
   /**

@@ -222,11 +222,6 @@ async function main(): Promise<void> {
     // Output session info for resume capability
     if (state) {
       outputSessionInfo(state);
-
-      // Show crash count if any crashes occurred during runtime
-      if (state.crashCount > 0) {
-        process.stderr.write(`\nSession had ${state.crashCount} crash(es) during runtime\n`);
-      }
     }
 
     process.exit(exitCode);

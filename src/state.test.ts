@@ -5,7 +5,6 @@ import {
   clearCurrentOrchestrator,
   createInitialState,
   setCurrentOrchestrator,
-  setMode,
   toRoman,
   updateArbiterContext,
   updateOrchestratorContext,
@@ -17,12 +16,10 @@ describe('state', () => {
     it('should create state with default values', () => {
       const state = createInitialState();
 
-      expect(state.mode).toBe('human_to_arbiter');
       expect(state.arbiterSessionId).toBeNull();
       expect(state.arbiterContextPercent).toBe(0);
       expect(state.currentOrchestrator).toBeNull();
       expect(state.conversationLog).toEqual([]);
-      expect(state.crashCount).toBe(0);
       expect(state.requirementsPath).toBeNull();
     });
 
@@ -30,8 +27,8 @@ describe('state', () => {
       const state1 = createInitialState();
       const state2 = createInitialState();
 
-      state1.crashCount = 5;
-      expect(state2.crashCount).toBe(0);
+      state1.arbiterContextPercent = 50;
+      expect(state2.arbiterContextPercent).toBe(0);
     });
   });
 
@@ -122,25 +119,6 @@ describe('state', () => {
     it('should be safe to call when no orchestrator exists', () => {
       clearCurrentOrchestrator(state);
       expect(state.currentOrchestrator).toBeNull();
-    });
-  });
-
-  describe('setMode', () => {
-    let state: AppState;
-
-    beforeEach(() => {
-      state = createInitialState();
-    });
-
-    it('should set mode to arbiter_to_orchestrator', () => {
-      setMode(state, 'arbiter_to_orchestrator');
-      expect(state.mode).toBe('arbiter_to_orchestrator');
-    });
-
-    it('should set mode back to human_to_arbiter', () => {
-      setMode(state, 'arbiter_to_orchestrator');
-      setMode(state, 'human_to_arbiter');
-      expect(state.mode).toBe('human_to_arbiter');
     });
   });
 

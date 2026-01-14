@@ -16,13 +16,20 @@ import { RESET } from '../tileset.js';
 const term = termKit.terminal;
 
 // Files that Arbiter creates and should be gitignored
-const ARBITER_FILES = ['.claude/.arbiter-session.json', '.claude/arbiter.tmp.log'];
+const ARBITER_FILES = [
+  '.claude/.arbiter-session.json',
+  '.claude/arbiter.tmp.log',
+  '.claude/arbiter-crash-report.log',
+  '.claude/arbiter-chat-history.log',
+];
 
 // What to append to .gitignore
 const GITIGNORE_ENTRIES = `
 # Arbiter
 .claude/.arbiter-session.json
 .claude/arbiter.tmp.log
+.claude/arbiter-crash-report.log
+.claude/arbiter-chat-history.log
 `;
 
 /**

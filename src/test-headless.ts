@@ -44,8 +44,8 @@ function createMockCallbacks(): RouterCallbacks {
     onToolUse: (tool: string, count: number) => {
       console.log(`[Tool Use] ${tool} (total calls: ${count})`);
     },
-    onModeChange: (mode: string) => {
-      console.log(`[Mode Changed] ${mode}`);
+    onArbiterIntent: (intent: string) => {
+      console.log(`[Arbiter Intent] ${intent}`);
     },
   };
 }

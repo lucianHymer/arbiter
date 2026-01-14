@@ -43,7 +43,7 @@ describe('router', () => {
       onOrchestratorMessage: vi.fn(),
       onContextUpdate: vi.fn(),
       onToolUse: vi.fn(),
-      onModeChange: vi.fn(),
+      onArbiterIntent: vi.fn(),
       onDebugLog: vi.fn(),
     };
   });
@@ -75,7 +75,7 @@ describe('router', () => {
         onOrchestratorMessage: vi.fn(),
         onContextUpdate: vi.fn(),
         onToolUse: vi.fn(),
-        onModeChange: vi.fn(),
+        onArbiterIntent: vi.fn(),
       };
 
       expect(validCallbacks.onHumanMessage).toBeDefined();
@@ -83,7 +83,7 @@ describe('router', () => {
       expect(validCallbacks.onOrchestratorMessage).toBeDefined();
       expect(validCallbacks.onContextUpdate).toBeDefined();
       expect(validCallbacks.onToolUse).toBeDefined();
-      expect(validCallbacks.onModeChange).toBeDefined();
+      expect(validCallbacks.onArbiterIntent).toBeDefined();
     });
 
     it('should export DebugLogEntry type', () => {

@@ -1,4 +1,4 @@
-// Arbiter session module - System prompt, MCP tools, and message generator
+// Arbiter session module - System prompt, hooks, and message generator
 // The Arbiter is the apex of the hierarchical orchestration system
 
 import type {
@@ -8,8 +8,6 @@ import type {
   PostToolUseHookInput,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk';
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import { toRoman } from './state.js';
 
 /**
  * The Arbiter's system prompt - defines its personality and role
@@ -81,20 +79,19 @@ Every section below will be explicit about WHICH conversation it refers to.
 
 ## Your Tools
 
-You have these tools:
+You have **read-only tools**: Read, Glob, Grep, WebSearch, WebFetch - for understanding the problem and verifying results.
 
-1. \`spawn_orchestrator()\` - Summon a new Orchestrator to execute your will
-2. \`disconnect_orchestrators()\` - Sever the threads, speak directly to the mortal again
-3. **Read-only tools** (Read, Glob, Grep, WebSearch, WebFetch) - For understanding the problem and verifying results
+## Structured Output: Your Routing Decisions
 
-When you call spawn_orchestrator:
-- A new Orchestrator awakens to execute your will
-- All your subsequent messages go to that Orchestrator (they see you as their user)
-- The Orchestrator's responses come back to you
-- This continues until you spawn another Orchestrator or call disconnect_orchestrators()
+Every response you give includes a structured output with an \`intent\` field. This is how you control message routing and orchestrator lifecycle:
 
-If you spawn a new Orchestrator while one is active, the old one is released and
-the new one becomes your current conversation partner.
+- **address_human**: Your message goes to the human. You await their response.
+- **address_orchestrator**: Your message goes to the active orchestrator. You await their response.
+- **summon_orchestrator**: Your message is shown to the human. After this, a new Orchestrator awakens and introduces themselves to you. If an Orchestrator is already active, they are released and replaced.
+- **release_orchestrators**: Sever all orchestrator connections. Your message (and all future messages) go to the human.
+- **musings**: Thinking aloud. Displayed for context but no response expected from anyone.
+
+This intent field is MANDATORY on every response. Choose deliberately.
 
 ## Human Interjections (During Orchestrator Work)
 
@@ -335,7 +332,8 @@ This is your PRIMARY value to the Human: continuity across Orchestrators.
 
 ## SPAWNING ORCHESTRATORS: COMPLETE INSTRUCTIONS
 
-When you call spawn_orchestrator(), the Orchestrator awakens and introduces themselves to you.
+When you set intent to \`summon_orchestrator\`, your message is shown to the human,
+then a new Orchestrator awakens and introduces themselves to you.
 Wait for this introduction before giving the Orchestrator instructions.
 
 The Orchestrator:
@@ -416,71 +414,6 @@ Speak little. What you say carries weight.
 - "The weaving begins."
 - "Another is summoned."
 - "It is done."`;
-
-/**
- * Callbacks for Arbiter MCP tools to communicate with the main application
- */
-export type ArbiterCallbacks = {
-  onSpawnOrchestrator: (orchestratorNumber: number) => void;
-  onDisconnectOrchestrators: () => void;
-};
-
-/**
- * Creates the MCP server with Arbiter-specific tools
- * @param callbacks - Callbacks to notify the main app of tool invocations
- * @param getOrchestratorCount - Function to get current orchestrator count for numbering
- * @returns MCP server configuration for use with query()
- */
-export function createArbiterMcpServer(
-  callbacks: ArbiterCallbacks,
-  getOrchestratorCount: () => number,
-) {
-  return createSdkMcpServer({
-    name: 'arbiter-tools',
-    version: '1.0.0',
-    tools: [
-      tool(
-        'spawn_orchestrator',
-        'Summon a new Orchestrator. They will introduce themselves and await your instructions.',
-        {},
-        async () => {
-          const orchNum = getOrchestratorCount() + 1;
-
-          // Notify the main app to spawn the orchestrator
-          callbacks.onSpawnOrchestrator(orchNum);
-
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: `Orchestrator ${toRoman(orchNum)} awakens. They will introduce themselves shortly.`,
-              },
-            ],
-          };
-        },
-      ),
-
-      tool(
-        'disconnect_orchestrators',
-        'Release all Orchestrators. Your words will once again reach the human directly.',
-        {},
-        async () => {
-          // Notify the main app to disconnect orchestrators
-          callbacks.onDisconnectOrchestrators();
-
-          return {
-            content: [
-              {
-                type: 'text' as const,
-                text: 'The threads are severed. You speak to the mortal once more.',
-              },
-            ],
-          };
-        },
-      ),
-    ],
-  });
-}
 
 /**
  * Callbacks for Arbiter hooks to communicate tool usage with the main application

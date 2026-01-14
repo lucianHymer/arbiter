@@ -23,15 +23,24 @@ export interface OrchestratorState {
 }
 
 /**
+ * Arbiter intent - explicit routing decision from structured output
+ * Replaces the old mode-based routing
+ */
+export type ArbiterIntent =
+  | 'address_human'
+  | 'address_orchestrator'
+  | 'summon_orchestrator'
+  | 'release_orchestrators'
+  | 'musings';
+
+/**
  * Main application state interface
  */
 export interface AppState {
-  mode: 'human_to_arbiter' | 'arbiter_to_orchestrator';
   arbiterSessionId: string | null;
   arbiterContextPercent: number;
   currentOrchestrator: OrchestratorState | null;
   conversationLog: Message[];
-  crashCount: number;
   requirementsPath: string | null;
 }
 
@@ -40,12 +49,10 @@ export interface AppState {
  */
 export function createInitialState(): AppState {
   return {
-    mode: 'human_to_arbiter',
     arbiterSessionId: null,
     arbiterContextPercent: 0,
     currentOrchestrator: null,
     conversationLog: [],
-    crashCount: 0,
     requirementsPath: null,
   };
 }
@@ -88,13 +95,6 @@ export function setCurrentOrchestrator(
  */
 export function clearCurrentOrchestrator(state: AppState): void {
   state.currentOrchestrator = null;
-}
-
-/**
- * Sets the routing mode
- */
-export function setMode(state: AppState, mode: AppState['mode']): void {
-  state.mode = mode;
 }
 
 /**

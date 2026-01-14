@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { DebugLogEntry, RouterCallbacks } from '../router.js';
-import type { AppState } from '../state.js';
+import type { ArbiterIntent } from '../state.js';
 import { DEBUG_LOG_PATH } from './constants.js';
 import type { Sprite } from './sprite.js';
 import type { Speaker } from './types.js';
@@ -27,7 +27,6 @@ export interface CallbackTUIState {
   toolCountSinceLastMessage: number;
   showToolIndicator: boolean;
   arbiterHasSpoken: boolean;
-  crashCount: number;
   waitingFor: 'none' | 'arbiter' | 'orchestrator';
 }
 
@@ -148,13 +147,15 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
       drawChat(); // Also redraw chat for tool indicator
     },
 
-    onModeChange: (mode: AppState['mode']) => {
-      if (mode === 'arbiter_to_orchestrator') {
-        // Don't need to do anything here - demons are spawned via onOrchestratorSpawn
-      } else {
-        // Mode changed back to human_to_arbiter
+    onArbiterIntent: (intent: ArbiterIntent) => {
+      // Handle visual feedback based on intent
+      // For now, just handle release - demon spawning is done via onOrchestratorSpawn
+      if (intent === 'release_orchestrators') {
         dismissAllOrchestrators(); // Fire and forget
       }
+      // Future: Could animate arbiter walking to different positions based on intent
+      // address_human -> walk toward human
+      // address_orchestrator/summon_orchestrator -> walk toward cauldron
     },
 
     onWaitingStart: (waitingFor: 'arbiter' | 'orchestrator') => {
@@ -207,12 +208,6 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
       state.currentTool = null;
       state.toolCallCount = 0;
       drawContext();
-    },
-
-    onCrashCountUpdate: (count: number) => {
-      const state = getState();
-      state.crashCount = count;
-      drawContext(true); // Force redraw
     },
 
     onDebugLog: (entry: DebugLogEntry) => {
