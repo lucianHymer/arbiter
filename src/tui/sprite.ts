@@ -12,8 +12,19 @@ import { playSfx } from '../sound.js';
  * Animation state union type representing all possible sprite animations
  */
 export type SpriteAnimation =
-  | { type: 'walking'; target: { row: number; col: number }; elapsed: number; onComplete: () => void }
-  | { type: 'hopping'; hopsRemaining: number; frame: 0 | 1; elapsed: number; onComplete: () => void }
+  | {
+      type: 'walking';
+      target: { row: number; col: number };
+      elapsed: number;
+      onComplete: () => void;
+    }
+  | {
+      type: 'hopping';
+      hopsRemaining: number;
+      frame: 0 | 1 | 2;
+      elapsed: number;
+      onComplete: () => void;
+    }
   | { type: 'magicSpawn'; elapsed: number; onComplete: () => void }
   | { type: 'magicDespawn'; elapsed: number; onComplete: () => void }
   | { type: 'magicTransform'; toTile: number; elapsed: number; onComplete: () => void }
@@ -163,8 +174,8 @@ export class Sprite {
   /**
    * Animates the sprite hopping in place
    *
-   * Only works if `controlled === false`. Each hop takes 500ms (250ms up, 250ms down).
-   * Plays jump sound on each hop start.
+   * Only works if `controlled === false`. Each hop takes 500ms (250ms up, 250ms down),
+   * with a 150ms rest between consecutive hops. Plays jump sound on each hop start.
    *
    * @param count - Number of hops to perform
    * @returns Promise that resolves when all hops are complete
@@ -382,9 +393,7 @@ export class Sprite {
   /**
    * Updates walking animation - moves one step every 1000ms toward target
    */
-  private tickWalking(
-    anim: Extract<SpriteAnimation, { type: 'walking' }>,
-  ): void {
+  private tickWalking(anim: Extract<SpriteAnimation, { type: 'walking' }>): void {
     const stepDuration = 1000;
 
     if (anim.elapsed >= stepDuration) {
@@ -421,34 +430,38 @@ export class Sprite {
   }
 
   /**
-   * Updates hopping animation - toggles frame every 250ms
+   * Updates hopping animation
+   * - Frame 0 (up): 250ms
+   * - Frame 1 (down): 250ms
+   * - Frame 2 (resting between hops): 150ms
    */
-  private tickHopping(
-    anim: Extract<SpriteAnimation, { type: 'hopping' }>,
-  ): void {
-    const frameDuration = 250;
+  private tickHopping(anim: Extract<SpriteAnimation, { type: 'hopping' }>): void {
+    const hopFrameDuration = 250;
+    const restDuration = 150;
 
-    if (anim.elapsed >= frameDuration) {
-      anim.elapsed -= frameDuration;
+    if (anim.frame === 0 && anim.elapsed >= hopFrameDuration) {
+      // Up phase complete, switch to down
+      anim.elapsed -= hopFrameDuration;
+      anim.frame = 1;
+    } else if (anim.frame === 1 && anim.elapsed >= hopFrameDuration) {
+      // Down phase complete (landed)
+      anim.elapsed -= hopFrameDuration;
+      anim.hopsRemaining -= 1;
 
-      if (anim.frame === 0) {
-        // Up phase complete, switch to down
-        anim.frame = 1;
+      if (anim.hopsRemaining <= 0) {
+        // All hops complete
+        const onComplete = anim.onComplete;
+        this._animation = null;
+        onComplete();
       } else {
-        // Down phase complete, hop finished
-        anim.hopsRemaining -= 1;
-
-        if (anim.hopsRemaining <= 0) {
-          // All hops complete
-          const onComplete = anim.onComplete;
-          this._animation = null;
-          onComplete();
-        } else {
-          // Start next hop
-          anim.frame = 0;
-          playSfx('jump');
-        }
+        // Rest briefly before next hop
+        anim.frame = 2;
       }
+    } else if (anim.frame === 2 && anim.elapsed >= restDuration) {
+      // Resting complete, start next hop
+      anim.elapsed -= restDuration;
+      anim.frame = 0;
+      playSfx('jump');
     }
   }
 
@@ -470,9 +483,7 @@ export class Sprite {
   /**
    * Updates bubbling animation - toggles showing based on random intervals
    */
-  private tickBubbling(
-    anim: Extract<SpriteAnimation, { type: 'bubbling' }>,
-  ): void {
+  private tickBubbling(anim: Extract<SpriteAnimation, { type: 'bubbling' }>): void {
     if (anim.elapsed >= anim.phaseDuration) {
       anim.elapsed = 0;
       anim.showing = !anim.showing;

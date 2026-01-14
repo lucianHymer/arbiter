@@ -12,7 +12,19 @@ import type { RouterCallbacks } from '../router.js';
 import { playSfx } from '../sound.js';
 import type { AppState } from '../state.js';
 import { toRoman } from '../state.js';
+import {
+  getAllSprites,
+  hasActiveAnimations,
+  registerSprite,
+  startAnimationLoop,
+  stopAnimationLoop,
+} from './animation-loop.js';
+import { createRouterCallbacks } from './callbacks.js';
+import { createLogViewer, type LogViewer } from './logViewer.js';
+import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
 import { createScene, renderScene } from './scene.js';
+import { Sprite } from './sprite.js';
+import { cleanupTerminal } from './terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
   compositeTiles,
@@ -25,12 +37,6 @@ import {
   type Tileset,
 } from './tileset.js';
 import type { Message, Speaker, WaitingState } from './types.js';
-import { Sprite } from './sprite.js';
-import { registerSprite, startAnimationLoop, stopAnimationLoop, getAllSprites, hasActiveAnimations } from './animation-loop.js';
-import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
-import { createLogViewer, type LogViewer } from './logViewer.js';
-import { createRouterCallbacks } from './callbacks.js';
-import { cleanupTerminal } from './terminal-cleanup.js';
 
 // ============================================================================
 // Types
@@ -58,7 +64,6 @@ export interface TUI {
   /** Stop the loading animation */
   stopWaiting(): void;
 }
-
 
 /**
  * Internal state for the TUI
@@ -340,7 +345,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   const humanSprite = new Sprite({
     id: 'human',
     tile: state.selectedCharacter,
-    position: { row: 2, col: 0 },  // Starts at left edge
+    position: { row: 2, col: 0 }, // Starts at left edge
     visible: true,
     controlled: false,
   });
@@ -348,7 +353,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   const arbiterSprite = new Sprite({
     id: 'arbiter',
     tile: TILE.ARBITER,
-    position: { row: 3, col: 4 },  // Starts by fire
+    position: { row: 3, col: 4 }, // Starts by fire
     visible: true,
     controlled: false,
   });
@@ -379,11 +384,41 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
   // Create demon sprites
   const demons: Sprite[] = [
-    new Sprite({ id: 'demon-1', tile: TILE.DEMON_1, position: { row: 2, col: 6 }, visible: false, controlled: false }),
-    new Sprite({ id: 'demon-2', tile: TILE.DEMON_2, position: { row: 1, col: 6 }, visible: false, controlled: false }),
-    new Sprite({ id: 'demon-3', tile: TILE.DEMON_3, position: { row: 3, col: 6 }, visible: false, controlled: false }),
-    new Sprite({ id: 'demon-4', tile: TILE.DEMON_4, position: { row: 1, col: 5 }, visible: false, controlled: false }),
-    new Sprite({ id: 'demon-5', tile: TILE.DEMON_5, position: { row: 3, col: 5 }, visible: false, controlled: false }),
+    new Sprite({
+      id: 'demon-1',
+      tile: TILE.DEMON_1,
+      position: { row: 2, col: 6 },
+      visible: false,
+      controlled: false,
+    }),
+    new Sprite({
+      id: 'demon-2',
+      tile: TILE.DEMON_2,
+      position: { row: 1, col: 6 },
+      visible: false,
+      controlled: false,
+    }),
+    new Sprite({
+      id: 'demon-3',
+      tile: TILE.DEMON_3,
+      position: { row: 3, col: 6 },
+      visible: false,
+      controlled: false,
+    }),
+    new Sprite({
+      id: 'demon-4',
+      tile: TILE.DEMON_4,
+      position: { row: 1, col: 5 },
+      visible: false,
+      controlled: false,
+    }),
+    new Sprite({
+      id: 'demon-5',
+      tile: TILE.DEMON_5,
+      position: { row: 3, col: 5 },
+      visible: false,
+      controlled: false,
+    }),
   ];
 
   // Register all sprites with the animation loop
@@ -392,14 +427,14 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   registerSprite(scrollSprite);
   registerSprite(spellbookSprite);
   registerSprite(smokeSprite);
-  demons.forEach(d => registerSprite(d));
+  for (const d of demons) registerSprite(d);
 
   // Note: Requirements overlay is initialized after drawing functions are defined
   // (see the "Requirements Overlay (deferred initialization)" section below).
 
   // Summon sequence state - simplified from state machine
-  let isSummoning = false;  // Whether a summon sequence is in progress
-  let pendingDemons: number[] = [];  // Queue of demon indices to spawn
+  let isSummoning = false; // Whether a summon sequence is in progress
+  let pendingDemons: number[] = []; // Queue of demon indices to spawn
 
   // Helper to properly suspend the process (used by main TUI and log viewer)
   const suspendProcess = () => {
@@ -424,8 +459,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    */
   function getFillerRow(tileset: Tileset, rowIndex: number): string[] {
     const cacheKey = `filler-${rowIndex}`;
-    if (fillerRowCache.has(cacheKey)) {
-      return fillerRowCache.get(cacheKey)!;
+    const cached = fillerRowCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     const grassPixels = extractTile(tileset, TILE.GRASS);
@@ -1175,7 +1211,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       arbiterSprite.chatting(5000);
     } else if (speaker === 'orchestrator') {
       // First visible demon shows the chat bubble
-      const visibleDemon = demons.find(d => d.visible);
+      const visibleDemon = demons.find((d) => d.visible);
       if (visibleDemon) visibleDemon.chatting(5000);
     }
     // system messages don't show a chat bubble
@@ -1607,8 +1643,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Uses sprite-based animations instead of the old state machine.
    */
   async function processSummonQueue() {
-    if (isSummoning) return;  // Already processing
-    if (pendingDemons.length === 0) return;  // Nothing to process
+    if (isSummoning) return; // Already processing
+    if (pendingDemons.length === 0) return; // Nothing to process
 
     isSummoning = true;
 
@@ -1626,9 +1662,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Spawn all queued demons
     while (pendingDemons.length > 0) {
-      const demonIndex = pendingDemons.shift()!;
+      const demonIndex = pendingDemons.shift();
+      if (demonIndex === undefined) break;
       if (demonIndex >= 0 && demonIndex < demons.length) {
-        await new Promise(r => setTimeout(r, 500));  // Brief delay
+        await new Promise((r) => setTimeout(r, 500)); // Brief delay
         await demons[demonIndex].magicSpawn();
         drawTiles(true);
       }
@@ -1643,7 +1680,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    */
   function queueDemonSpawn(demonIndex: number) {
     pendingDemons.push(demonIndex);
-    processSummonQueue();  // Fire and forget - don't await
+    processSummonQueue(); // Fire and forget - don't await
   }
 
   /**
@@ -1656,19 +1693,17 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Wait for any in-progress summon to finish
     while (isSummoning) {
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
     }
 
     // Despawn all visible demons
-    const despawnPromises = demons
-      .filter(d => d.visible)
-      .map(d => d.magicDespawn());
+    const despawnPromises = demons.filter((d) => d.visible).map((d) => d.magicDespawn());
     await Promise.all(despawnPromises);
     drawTiles(true);
 
     // Hide spellbook
     if (spellbookSprite.visible) {
-      spellbookSprite.visible = false;  // Instant hide
+      spellbookSprite.visible = false; // Instant hide
       drawTiles(true);
     }
 
@@ -1717,6 +1752,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Human walks in from left edge to col 1
     await humanSprite.walk({ row: 2, col: 1 });
     drawTiles(true);
+
+    // Pause a beat before hopping
+    await new Promise((resolve) => setTimeout(resolve, 1000));
 
     // Human hops twice (surprised)
     await humanSprite.hop(2);
@@ -1982,7 +2020,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // Hop for 3 seconds (6 hops)
     const target = waitingFor === 'arbiter' ? arbiterSprite : demons[0];
     if (target) {
-      target.hop(6);  // Fire and forget
+      target.hop(6); // Fire and forget
     }
 
     // Start cauldron bubbling
@@ -2002,7 +2040,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Stop any ongoing animations
     arbiterSprite.stopAnimation();
-    demons.forEach(d => d.stopAnimation());
+    for (const d of demons) d.stopAnimation();
 
     // Stop bubbling
     smokeSprite.stopBubbling();
