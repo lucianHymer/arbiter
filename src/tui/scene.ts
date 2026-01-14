@@ -6,6 +6,7 @@
  * with sprites rendered on top based on their position and animation state.
  */
 
+import type { Sprite, SpriteAnimation } from './sprite.js';
 import {
   CHAR_HEIGHT,
   compositeQuarterTile,
@@ -18,7 +19,6 @@ import {
   TILE,
   type Tileset,
 } from './tileset.js';
-import { Sprite, type SpriteAnimation } from './sprite.js';
 
 // ============================================================================
 // Types
@@ -33,17 +33,8 @@ export type TileSpec = number | { tile: number; mirrored: boolean };
 // Constants
 // ============================================================================
 
-const SCENE_WIDTH = 7;
-const SCENE_HEIGHT = 6;
-
-// Demon spawn positions around the campfire (order matters for spawning)
-export const DEMON_POSITIONS = [
-  { row: 2, col: 6, tile: TILE.DEMON_1 }, // right of fire (first)
-  { row: 1, col: 6, tile: TILE.DEMON_2 }, // above-right
-  { row: 3, col: 6, tile: TILE.DEMON_3 }, // below-right
-  { row: 1, col: 5, tile: TILE.DEMON_4 }, // above fire
-  { row: 3, col: 5, tile: TILE.DEMON_5 }, // below fire
-];
+export const SCENE_WIDTH = 7;
+export const SCENE_HEIGHT = 6;
 
 /**
  * Get a varied grass tile based on position for visual variety
@@ -80,8 +71,9 @@ function getTileRender(
   mirrored: boolean = false,
 ): string[] {
   const key = getCacheKey(tileIndex, mirrored);
-  if (tileCache.has(key)) {
-    return tileCache.get(key)!;
+  const cached = tileCache.get(key);
+  if (cached) {
+    return cached;
   }
 
   let pixels = extractTile(tileset, tileIndex);
@@ -231,11 +223,7 @@ function getAlertQuarter(tileset: Tileset): RGB[][] {
  * @param background - The tile grid from createScene
  * @param sprites - Array of Sprites to render on top of the background
  */
-export function renderScene(
-  tileset: Tileset,
-  background: TileSpec[][],
-  sprites: Sprite[],
-): string {
+export function renderScene(tileset: Tileset, background: TileSpec[][], sprites: Sprite[]): string {
   // Get grass pixels for compositing
   const grassPixels = extractTile(tileset, TILE.GRASS);
 
@@ -279,7 +267,9 @@ export function renderScene(
         // Handle magic animations - show smoke tile instead
         if (
           anim &&
-          (anim.type === 'magicSpawn' || anim.type === 'magicDespawn' || anim.type === 'magicTransform')
+          (anim.type === 'magicSpawn' ||
+            anim.type === 'magicDespawn' ||
+            anim.type === 'magicTransform')
         ) {
           spriteTile = TILE.SMOKE;
         }

@@ -7,14 +7,11 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { DIM } from '../constants.js';
 import { cleanupTerminal } from '../terminal-cleanup.js';
+import { RESET } from '../tileset.js';
 
 const term = termKit.terminal;
-
-// ANSI codes
-const _BOLD = '\x1b[1m';
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
 
 // Fire gradient colors (top = bright, bottom = dark)
 const FIRE_COLORS = [

@@ -8,6 +8,7 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { BOLD, BRIGHT_WHITE, DIM } from '../constants.js';
 import { Sprite } from '../sprite.js';
 import { cleanupTerminal } from '../terminal-cleanup.js';
 import {
@@ -35,12 +36,7 @@ const SCENE_HEIGHT_TILES = 5;
 const SCENE_WIDTH_CHARS = SCENE_WIDTH_TILES * TILE_SIZE; // 112 chars
 const SCENE_HEIGHT_CHARS = SCENE_HEIGHT_TILES * CHAR_HEIGHT; // 40 rows
 
-// ANSI codes
-const BOLD = '\x1b[1m';
-const WHITE = '\x1b[97m';
-const DIM = '\x1b[2m';
-
-// True color theme colors (RGB)
+// True color theme colors (RGB) - screen-specific
 const COLOR_ARBITER = '\x1b[38;2;100;255;100m'; // Green for THE ARBITER
 const COLOR_WAS = '\x1b[38;2;100;200;255m'; // Blue-cyan for "WAS"
 const COLOR_IS = '\x1b[38;2;200;100;255m'; // Purple for "IS"
@@ -520,12 +516,12 @@ function renderDialogueBox(tileset: Tileset): string[] {
 
   // The Arbiter wisdom text
   const textLines = [
-    `${WHITE}You approach the lair of`,
+    `${BRIGHT_WHITE}You approach the lair of`,
     '',
     `${BOLD}${COLOR_ARBITER}THE ARBITER`,
-    `${WHITE}OF THAT WHICH ${COLOR_WAS}WAS${WHITE},`,
-    `${WHITE}THAT WHICH ${COLOR_IS}IS${WHITE},`,
-    `${WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
+    `${BRIGHT_WHITE}OF THAT WHICH ${COLOR_WAS}WAS${BRIGHT_WHITE},`,
+    `${BRIGHT_WHITE}THAT WHICH ${COLOR_IS}IS${BRIGHT_WHITE},`,
+    `${BRIGHT_WHITE}AND THAT WHICH ${rainbow('SHALL COME TO BE')}`,
   ];
 
   // Center text in the dialogue box
@@ -619,13 +615,13 @@ function renderRatDialogueBox(tileset: Tileset): string[] {
 
   // Rat dialogue text (compressed)
   const textLines = [
-    `${COLOR_RAT_EEK}*eek!* ${WHITE}Heed my example!`,
+    `${COLOR_RAT_EEK}*eek!* ${BRIGHT_WHITE}Heed my example!`,
     '',
-    `${WHITE}The Arbiter rewards those who sacrifice first -`,
-    `${WHITE}who toil over their requirements until every detail is known.`,
+    `${BRIGHT_WHITE}The Arbiter rewards those who sacrifice first -`,
+    `${BRIGHT_WHITE}who toil over their requirements until every detail is known.`,
     '',
-    `${WHITE}If you offer only scattered thoughts, turn ye back!`,
-    `${WHITE}He might ruin your code, or turn you into a rat!`,
+    `${BRIGHT_WHITE}If you offer only scattered thoughts, turn ye back!`,
+    `${BRIGHT_WHITE}He might ruin your code, or turn you into a rat!`,
   ];
 
   // Center text in the dialogue box
@@ -803,12 +799,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
         playSfx('quickNotice');
       }
 
-      const sceneLines = renderForestScene(
-        tileset,
-        player.tile,
-        playerPos.col,
-        playerPos.row,
-      );
+      const sceneLines = renderForestScene(tileset, player.tile, playerPos.col, playerPos.row);
 
       // Write scene lines
       for (let i = 0; i < sceneLines.length; i++) {

@@ -54,6 +54,11 @@ export const TILE = {
   DEMON_3: 222,
   DEMON_4: 223,
   DEMON_5: 224,
+  DEMON_6: 225,
+  DEMON_7: 226,
+  DEMON_8: 227,
+  DEMON_9: 228,
+  DEMON_10: 229,
   FOCUS: 270, // Focus overlay - corner brackets to highlight active speaker
   CHAT_BUBBLE_QUARTERS: 267, // Quarter tiles - top-right is chat bubble indicator
   ALERT_QUARTERS: 268, // Quarter tiles - top-left is exclamation/alert indicator

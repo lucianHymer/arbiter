@@ -20,9 +20,10 @@ import {
   stopAnimationLoop,
 } from './animation-loop.js';
 import { createRouterCallbacks } from './callbacks.js';
+import { DEBUG_LOG_PATH } from './constants.js';
 import { createLogViewer, type LogViewer } from './logViewer.js';
 import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
-import { createScene, renderScene } from './scene.js';
+import { createScene, renderScene, SCENE_HEIGHT, SCENE_WIDTH } from './scene.js';
 import { Sprite } from './sprite.js';
 import { cleanupTerminal } from './terminal-cleanup.js';
 import {
@@ -136,9 +137,7 @@ interface RedrawTracker {
 // Constants
 // ============================================================================
 
-// Scene dimensions
-const SCENE_WIDTH = 7;
-const SCENE_HEIGHT = 6;
+// Scene dimensions (SCENE_WIDTH, SCENE_HEIGHT imported from scene.ts)
 const TILE_AREA_WIDTH = SCENE_WIDTH * TILE_SIZE; // 112 chars
 const TILE_AREA_HEIGHT = SCENE_HEIGHT * CHAR_HEIGHT; // 48 rows
 
@@ -147,9 +146,6 @@ const fillerRowCache: Map<string, string[]> = new Map();
 
 // Animation
 const ANIMATION_INTERVAL = 250; // ms
-
-// Debug log file (temporary, cleared each session)
-const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
 
 // Input area
 const MAX_INPUT_LINES = 5; // Maximum visible lines in input area
@@ -382,44 +378,29 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     controlled: false,
   });
 
-  // Create demon sprites
-  const demons: Sprite[] = [
-    new Sprite({
-      id: 'demon-1',
-      tile: TILE.DEMON_1,
-      position: { row: 2, col: 6 },
-      visible: false,
-      controlled: false,
-    }),
-    new Sprite({
-      id: 'demon-2',
-      tile: TILE.DEMON_2,
-      position: { row: 1, col: 6 },
-      visible: false,
-      controlled: false,
-    }),
-    new Sprite({
-      id: 'demon-3',
-      tile: TILE.DEMON_3,
-      position: { row: 3, col: 6 },
-      visible: false,
-      controlled: false,
-    }),
-    new Sprite({
-      id: 'demon-4',
-      tile: TILE.DEMON_4,
-      position: { row: 1, col: 5 },
-      visible: false,
-      controlled: false,
-    }),
-    new Sprite({
-      id: 'demon-5',
-      tile: TILE.DEMON_5,
-      position: { row: 3, col: 5 },
-      visible: false,
-      controlled: false,
-    }),
+  // Create demon sprites (orchestrators)
+  const demonConfigs = [
+    { row: 2, col: 6, tile: TILE.DEMON_1 },
+    { row: 1, col: 6, tile: TILE.DEMON_2 },
+    { row: 3, col: 6, tile: TILE.DEMON_3 },
+    { row: 4, col: 5, tile: TILE.DEMON_4 },
+    { row: 4, col: 3, tile: TILE.DEMON_5 },
+    { row: 3, col: 3, tile: TILE.DEMON_6 },
+    { row: 0, col: 5, tile: TILE.DEMON_7 },
+    { row: 0, col: 4, tile: TILE.DEMON_8 },
+    { row: 1, col: 4, tile: TILE.DEMON_9 },
+    { row: 2, col: 4, tile: TILE.DEMON_10 },
   ];
+  const demons: Sprite[] = demonConfigs.map(
+    (cfg, i) =>
+      new Sprite({
+        id: `demon-${i + 1}`,
+        tile: cfg.tile,
+        position: { row: cfg.row, col: cfg.col },
+        visible: false,
+        controlled: false,
+      }),
+  );
 
   // Register all sprites with the animation loop
   registerSprite(humanSprite);

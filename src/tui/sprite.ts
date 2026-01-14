@@ -289,6 +289,7 @@ export class Sprite {
    * (400-1200ms on, 600-2000ms off). Loops indefinitely until stopped.
    */
   startBubbling(): void {
+    this.visible = true;
     const phaseDuration = this.getRandomBubbleDuration(true);
     this._animation = {
       type: 'bubbling',

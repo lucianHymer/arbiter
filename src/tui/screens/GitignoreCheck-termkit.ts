@@ -9,15 +9,11 @@ import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import termKit from 'terminal-kit';
+import { DIM, GREEN, YELLOW } from '../constants.js';
 import { cleanupTerminal } from '../terminal-cleanup.js';
+import { RESET } from '../tileset.js';
 
 const term = termKit.terminal;
-
-// ANSI codes
-const DIM = '\x1b[2m';
-const RESET = '\x1b[0m';
-const YELLOW = '\x1b[33m';
-const GREEN = '\x1b[32m';
 
 // Files that Arbiter creates and should be gitignored
 const ARBITER_FILES = ['.claude/.arbiter-session.json', '.claude/arbiter.tmp.log'];

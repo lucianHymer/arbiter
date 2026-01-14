@@ -8,6 +8,7 @@
 
 import termKit from 'terminal-kit';
 import { playSfx } from '../../sound.js';
+import { BOLD, CYAN, DIM, YELLOW } from '../constants.js';
 import { cleanupTerminal } from '../terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
@@ -55,12 +56,6 @@ const CHARACTER_NAMES = [
 // Layout constants
 const TILE_SPACING = 2; // Space between tiles (characters)
 const TILE_DISPLAY_WIDTH = TILE_SIZE; // 16 chars per tile
-
-// ANSI codes
-const BOLD = '\x1b[1m';
-const DIM = '\x1b[2m';
-const YELLOW = '\x1b[33m';
-const CYAN = '\x1b[36m';
 
 // ============================================================================
 // Rendering Functions

@@ -6,10 +6,7 @@
  */
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
-
-// Debug log file path (same as in tui-termkit.ts)
-const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
+import { DEBUG_LOG_PATH } from './constants.js';
 
 /**
  * Dependencies required by the log viewer
@@ -89,7 +86,7 @@ export function createLogViewer(deps: LogViewerDeps): LogViewer {
    * Handle a key press in the log viewer
    */
   function handleKey(key: string): void {
-    const { term, getHeight, onClose, onCloseAndExit, onCloseAndSuspend } = deps;
+    const { getHeight, onClose, onCloseAndExit, onCloseAndSuspend } = deps;
     const height = getHeight();
     const visibleLines = height - 2;
     const halfPage = Math.floor(visibleLines / 2);

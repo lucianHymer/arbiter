@@ -9,11 +9,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { DebugLogEntry, RouterCallbacks } from '../router.js';
 import type { AppState } from '../state.js';
+import { DEBUG_LOG_PATH } from './constants.js';
 import type { Sprite } from './sprite.js';
 import type { Speaker } from './types.js';
-
-// Debug log file path (same as in tui-termkit.ts)
-const DEBUG_LOG_PATH = path.join(process.cwd(), '.claude', 'arbiter.tmp.log');
 
 /**
  * Internal TUI state required for callbacks
@@ -72,9 +70,7 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
   const {
     getState,
     isEntranceComplete,
-    getPendingArbiterMessage,
     setPendingArbiterMessage,
-    humanSprite,
     arbiterSprite,
     demons,
     smokeSprite,
@@ -138,7 +134,10 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
       state.toolCountSinceLastMessage++;
       state.showToolIndicator = true;
       // Keep last 2 tools
-      if (state.recentTools.length === 0 || state.recentTools[state.recentTools.length - 1] !== tool) {
+      if (
+        state.recentTools.length === 0 ||
+        state.recentTools[state.recentTools.length - 1] !== tool
+      ) {
         state.recentTools.push(tool);
         if (state.recentTools.length > 2) {
           state.recentTools.shift();
@@ -184,7 +183,7 @@ export function createRouterCallbacks(deps: CallbackDeps): RouterCallbacks {
 
       // Stop any ongoing animations
       arbiterSprite.stopAnimation();
-      demons.forEach((d) => d.stopAnimation());
+      for (const d of demons) d.stopAnimation();
 
       // Stop bubbling
       smokeSprite.stopBubbling();
