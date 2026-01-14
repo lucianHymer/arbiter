@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import termKit from 'terminal-kit';
 import type { RouterCallbacks } from '../router.js';
-import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../sound.js';
+import { cycleMusicMode, getMusicMode, isSfxEnabled, playSfx, toggleSfx } from '../sound.js';
 import type { AppState } from '../state.js';
 import { toRoman } from '../state.js';
 import {
@@ -758,11 +758,21 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     const DIM = '\x1b[38;2;140;140;140m';
     const RESET = '\x1b[0m';
 
-    // Sound toggle labels: show what pressing the key will DO (toggle to opposite state)
-    const musicOn = isMusicEnabled();
+    // Sound toggle labels with colors (green=on, yellow=quiet, red=off) + bold
+    const musicMode = getMusicMode();
     const sfxOn = isSfxEnabled();
-    const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
-    const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
+    const cGreen = '\x1b[1;92m'; // bold bright green
+    const cYellow = '\x1b[1;93m'; // bold bright yellow
+    const cRed = '\x1b[1;91m'; // bold bright red
+    const musicLabel =
+      musicMode === 'on'
+        ? `m:music(${cGreen}ON${RESET}${DIM}/quiet/off)`
+        : musicMode === 'quiet'
+          ? `m:music(on/${cYellow}QUIET${RESET}${DIM}/off)`
+          : `m:music(on/quiet/${cRed}OFF${RESET}${DIM})`;
+    const sfxLabel = sfxOn
+      ? `s:sfx(${cGreen}ON${RESET}${DIM}/off)`
+      : `s:sfx(on/${cRed}OFF${RESET}${DIM})`;
 
     if (state.mode === 'INSERT') {
       // Single line: mode + hints + system + sound toggles (no m/s functionality in insert)
@@ -780,7 +790,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         `${DIM}    i:insert [mode]  ·  ↑/↓:scroll  ·  ^C:quit  ·  ^Z:suspend${RESET}`;
 
       // Line 2: aligned under the hints (12 chars in: 8 for badge + 4 spaces)
-      // o:log  ·  m:music-off  ·  s:sfx-off
       const indent = ' '.repeat(12); // 8 (badge) + 4 (spaces)
       const line2 = `${indent}${DIM}o:log  ·  ${musicLabel}  ·  ${sfxLabel}${RESET}`;
 
@@ -1600,7 +1609,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       case 'm':
         // Toggle music
-        toggleMusic();
+        cycleMusicMode();
         drawStatus(true);
         break;
 

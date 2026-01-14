@@ -7,7 +7,7 @@
  */
 
 import termKit from 'terminal-kit';
-import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
+import { cycleMusicMode, getMusicMode, isSfxEnabled, playSfx, toggleSfx } from '../../sound.js';
 import { BOLD, BRIGHT_WHITE, DIM } from '../constants.js';
 import { Sprite } from '../sprite.js';
 import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
@@ -853,15 +853,25 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
      * Draw sound hint in bottom-right corner
      */
     function drawSoundHint() {
-      const musicOn = isMusicEnabled();
+      const musicMode = getMusicMode();
       const sfxOn = isSfxEnabled();
-      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
-      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
-      const soundHint = `${DIM}${musicLabel}  ${sfxLabel}${RESET}`;
+      const cGreen = '\x1b[1;92m'; // bold bright green
+      const cYellow = '\x1b[1;93m'; // bold bright yellow
+      const cRed = '\x1b[1;91m'; // bold bright red
+      const musicLabel =
+        musicMode === 'on'
+          ? `${DIM}m:music(${cGreen}ON${RESET}${DIM}/quiet/off)`
+          : musicMode === 'quiet'
+            ? `${DIM}m:music(on/${cYellow}QUIET${RESET}${DIM}/off)`
+            : `${DIM}m:music(on/quiet/${cRed}OFF${RESET}${DIM})`;
+      const sfxLabel = sfxOn
+        ? `${DIM}s:sfx(${cGreen}ON${RESET}${DIM}/off)`
+        : `${DIM}s:sfx(on/${cRed}OFF${RESET}${DIM})`;
+      const soundHint = `${musicLabel}  ${sfxLabel}${RESET}`;
       // Clear the area first to prevent trailing characters when label shrinks
-      term.moveTo(width - 24, height);
-      process.stdout.write(' '.repeat(24));
-      term.moveTo(width - 24, height);
+      term.moveTo(width - 40, height);
+      process.stdout.write(' '.repeat(40));
+      term.moveTo(width - 40, height);
       process.stdout.write(soundHint);
     }
 
@@ -978,7 +988,7 @@ export async function showForestIntro(selectedCharacter: number): Promise<'succe
 
       // Sound toggles (work in any phase)
       if (key === 'm') {
-        toggleMusic();
+        cycleMusicMode();
         drawSoundHint();
         return;
       }

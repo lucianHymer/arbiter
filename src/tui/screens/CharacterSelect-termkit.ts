@@ -7,7 +7,7 @@
  */
 
 import termKit from 'terminal-kit';
-import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
+import { cycleMusicMode, getMusicMode, isSfxEnabled, playSfx, toggleSfx } from '../../sound.js';
 import { BOLD, CYAN, DIM, YELLOW } from '../constants.js';
 import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import {
@@ -204,18 +204,32 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
       const instructionY = nameY + 2;
       const instructions1 =
         '[←/→ or H/L] Navigate   [ENTER] Select   [SPACE] Skip intro   [Q] Exit';
-      const musicOn = isMusicEnabled();
+      const musicMode = getMusicMode();
       const sfxOn = isSfxEnabled();
-      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
-      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
-      const instructions2 = `${musicLabel}   ${sfxLabel}`;
+      const cGreen = '\x1b[1;92m'; // bold bright green
+      const cYellow = '\x1b[1;93m'; // bold bright yellow
+      const cRed = '\x1b[1;91m'; // bold bright red
+      const musicLabel =
+        musicMode === 'on'
+          ? `${DIM}m:music(${cGreen}ON${RESET}${DIM}/quiet/off)`
+          : musicMode === 'quiet'
+            ? `${DIM}m:music(on/${cYellow}QUIET${RESET}${DIM}/off)`
+            : `${DIM}m:music(on/quiet/${cRed}OFF${RESET}${DIM})`;
+      const sfxLabel = sfxOn
+        ? `${DIM}s:sfx(${cGreen}ON${RESET}${DIM}/off)`
+        : `${DIM}s:sfx(on/${cRed}OFF${RESET}${DIM})`;
+      const instructions2 = `${musicLabel}   ${sfxLabel}${RESET}`;
+      const instructions2Visible = 'm:music(ON/quiet/off)   s:sfx(ON/off)'; // for centering
       term.moveTo(Math.max(1, Math.floor((width - instructions1.length) / 2)), instructionY);
       process.stdout.write(`${DIM}${instructions1}${RESET}`);
       // Clear the line first to prevent trailing characters when label shrinks
       term.moveTo(1, instructionY + 1);
       process.stdout.write(' '.repeat(width));
-      term.moveTo(Math.max(1, Math.floor((width - instructions2.length) / 2)), instructionY + 1);
-      process.stdout.write(`${DIM}${instructions2}${RESET}`);
+      term.moveTo(
+        Math.max(1, Math.floor((width - instructions2Visible.length) / 2)),
+        instructionY + 1,
+      );
+      process.stdout.write(instructions2);
     }
 
     /**
@@ -224,16 +238,30 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
     function drawSoundHints() {
       const nameY = startY + 3 + CHAR_HEIGHT + 2; // tilesStartY + CHAR_HEIGHT + 2
       const instructionY = nameY + 2;
-      const musicOn = isMusicEnabled();
+      const musicMode = getMusicMode();
       const sfxOn = isSfxEnabled();
-      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
-      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
-      const instructions2 = `${musicLabel}   ${sfxLabel}`;
+      const cGreen = '\x1b[1;92m'; // bold bright green
+      const cYellow = '\x1b[1;93m'; // bold bright yellow
+      const cRed = '\x1b[1;91m'; // bold bright red
+      const musicLabel =
+        musicMode === 'on'
+          ? `${DIM}m:music(${cGreen}ON${RESET}${DIM}/quiet/off)`
+          : musicMode === 'quiet'
+            ? `${DIM}m:music(on/${cYellow}QUIET${RESET}${DIM}/off)`
+            : `${DIM}m:music(on/quiet/${cRed}OFF${RESET}${DIM})`;
+      const sfxLabel = sfxOn
+        ? `${DIM}s:sfx(${cGreen}ON${RESET}${DIM}/off)`
+        : `${DIM}s:sfx(on/${cRed}OFF${RESET}${DIM})`;
+      const instructions2 = `${musicLabel}   ${sfxLabel}${RESET}`;
+      const instructions2Visible = 'm:music(ON/quiet/off)   s:sfx(ON/off)'; // for centering
       // Clear the line first to prevent trailing characters when label shrinks
       term.moveTo(1, instructionY + 1);
       process.stdout.write(' '.repeat(width));
-      term.moveTo(Math.max(1, Math.floor((width - instructions2.length) / 2)), instructionY + 1);
-      process.stdout.write(`${DIM}${instructions2}${RESET}`);
+      term.moveTo(
+        Math.max(1, Math.floor((width - instructions2Visible.length) / 2)),
+        instructionY + 1,
+      );
+      process.stdout.write(instructions2);
     }
 
     /**
@@ -288,7 +316,7 @@ export async function showCharacterSelect(): Promise<CharacterSelectResult> {
         process.exit(0);
       } else if (key === 'm') {
         // Toggle music
-        toggleMusic();
+        cycleMusicMode();
         drawSoundHints();
       } else if (key === 's') {
         // Toggle sound effects

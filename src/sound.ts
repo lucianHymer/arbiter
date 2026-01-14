@@ -23,18 +23,21 @@ const PACKAGE_ROOT = path.resolve(__dirname, '..'); // From dist/ to package roo
 const player = playSound();
 
 /**
- * Sound state - controls whether audio plays
+ * Music mode type
  */
-const soundState = {
-  musicEnabled: true,
-  sfxEnabled: true,
-};
+export type MusicMode = 'on' | 'quiet' | 'off';
 
 /**
- * Currently playing music process (for stopping/looping)
+ * Sound state
  */
-let currentMusicProcess: ChildProcess | null = null;
-let musicShouldLoop = false;
+let sfxEnabled = true;
+
+/**
+ * Music state - single source of truth
+ */
+let musicMode: MusicMode = 'on';
+let musicProcess: ChildProcess | null = null;
+let musicGeneration = 0; // Invalidates pending callbacks on mode change
 
 /**
  * Sound effect filename mappings
@@ -63,7 +66,7 @@ export type SfxName = keyof typeof SFX;
  * @param name - The name of the sound effect to play
  */
 export function playSfx(name: SfxName): void {
-  if (!soundState.sfxEnabled) return;
+  if (!sfxEnabled) return;
 
   const filename = SFX[name];
   const filepath = path.join(PACKAGE_ROOT, 'assets', 'sounds', filename);
@@ -78,92 +81,108 @@ export function playSfx(name: SfxName): void {
 }
 
 /**
- * Music filename
+ * Music filenames by mode
  */
-const MUSIC_FILE = 'arbiter_theme.wav';
+const MUSIC_FILES: Record<Exclude<MusicMode, 'off'>, string> = {
+  on: 'arbiter_theme.wav',
+  quiet: 'arbiter_theme_quiet.wav',
+};
 
 /**
- * Start playing background music (loops until stopped)
+ * Internal: start the loop for current mode
  */
-export function startMusic(): void {
-  if (!soundState.musicEnabled) return;
-  if (currentMusicProcess) return; // Already playing
+function playLoop(): void {
+  if (musicMode === 'off') return;
 
-  musicShouldLoop = true;
-  playMusicTrack();
-}
+  const gen = musicGeneration;
+  const file = MUSIC_FILES[musicMode];
+  const filepath = path.join(PACKAGE_ROOT, 'assets', 'sounds', file);
 
-/**
- * Internal: play the music track once, restart if looping
- */
-function playMusicTrack(): void {
-  if (!musicShouldLoop || !soundState.musicEnabled) return;
+  musicProcess = player.play(filepath, () => {
+    // Only act if this is still the current generation
+    if (gen !== musicGeneration) return;
 
-  const filepath = path.join(PACKAGE_ROOT, 'assets', 'sounds', MUSIC_FILE);
-
-  currentMusicProcess = player.play(filepath, (err) => {
-    currentMusicProcess = null;
-    // If we should still be looping and music is enabled, restart
-    if (musicShouldLoop && soundState.musicEnabled) {
-      playMusicTrack();
+    musicProcess = null;
+    if (musicMode !== 'off') {
+      playLoop();
     }
   }) as ChildProcess;
 }
 
 /**
- * Stop background music
+ * Kill the current music process
  */
-export function stopMusic(): void {
-  musicShouldLoop = false;
-  if (currentMusicProcess) {
-    currentMusicProcess.kill();
-    currentMusicProcess = null;
+function killMusicProcess(): void {
+  if (musicProcess) {
+    musicProcess.kill();
+    musicProcess = null;
   }
 }
 
 /**
- * Toggle music on/off
- * @returns new state
+ * Set music mode - THE single function for all music control
+ * Stops current playback and starts new track if mode != 'off'
  */
-export function toggleMusic(): boolean {
-  soundState.musicEnabled = !soundState.musicEnabled;
-  if (soundState.musicEnabled) {
-    // Start music when enabled (either fresh start or resume)
-    musicShouldLoop = true;
-    if (!currentMusicProcess) {
-      playMusicTrack();
-    }
-  } else {
-    // Stop current playback but remember we should loop
-    if (currentMusicProcess) {
-      currentMusicProcess.kill();
-      currentMusicProcess = null;
-    }
+export function setMusicMode(mode: MusicMode): void {
+  musicGeneration++; // Invalidate any pending loop callbacks
+  musicMode = mode;
+
+  // Stop current playback
+  killMusicProcess();
+
+  // Start new if not off
+  if (mode !== 'off') {
+    playLoop();
   }
-  return soundState.musicEnabled;
+}
+
+/**
+ * Get current music mode
+ */
+export function getMusicMode(): MusicMode {
+  return musicMode;
+}
+
+/**
+ * Cycle music mode: on → quiet → off → on
+ */
+export function cycleMusicMode(): MusicMode {
+  const modes: MusicMode[] = ['on', 'quiet', 'off'];
+  const nextIndex = (modes.indexOf(musicMode) + 1) % modes.length;
+  setMusicMode(modes[nextIndex]);
+  return musicMode;
+}
+
+/**
+ * Start music if mode says we should be playing (for app init)
+ */
+export function startMusic(): void {
+  if (musicMode !== 'off' && !musicProcess) {
+    playLoop();
+  }
+}
+
+/**
+ * Stop music (for app exit) - doesn't change mode
+ */
+export function stopMusic(): void {
+  musicGeneration++;
+  killMusicProcess();
 }
 
 /**
  * Toggle sound effects on/off
- * @returns new state
  */
 export function toggleSfx(): boolean {
-  soundState.sfxEnabled = !soundState.sfxEnabled;
-  return soundState.sfxEnabled;
-}
-
-/**
- * Get current music enabled state
- */
-export function isMusicEnabled(): boolean {
-  return soundState.musicEnabled;
+  sfxEnabled = !sfxEnabled;
+  return sfxEnabled;
 }
 
 /**
  * Get current sfx enabled state
  */
 export function isSfxEnabled(): boolean {
-  return soundState.sfxEnabled;
+  return sfxEnabled;
 }
 
 /**
@@ -171,6 +190,6 @@ export function isSfxEnabled(): boolean {
  * Used for --sound-off CLI flag
  */
 export function disableAllSound(): void {
-  soundState.musicEnabled = false;
-  soundState.sfxEnabled = false;
+  setMusicMode('off');
+  sfxEnabled = false;
 }

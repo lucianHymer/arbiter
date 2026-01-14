@@ -6,7 +6,7 @@
  */
 
 import termKit from 'terminal-kit';
-import { isMusicEnabled, isSfxEnabled, playSfx, toggleMusic, toggleSfx } from '../../sound.js';
+import { cycleMusicMode, getMusicMode, isSfxEnabled, playSfx, toggleSfx } from '../../sound.js';
 import { DIM } from '../constants.js';
 import { cleanupTerminal, exitTerminal } from '../terminal-cleanup.js';
 import { RESET } from '../tileset.js';
@@ -122,16 +122,26 @@ export async function showTitleScreen(): Promise<void> {
       term.moveTo(promptX, promptY);
       process.stdout.write(`${DIM}${prompt}${RESET}`);
 
-      // Sound hint in corner - show what pressing will DO
-      const musicOn = isMusicEnabled();
+      // Sound hint - show current state with color (green=on, yellow=quiet, red=off)
+      const musicMode = getMusicMode();
       const sfxOn = isSfxEnabled();
-      const musicLabel = musicOn ? 'm:music-off' : 'm:music-on';
-      const sfxLabel = sfxOn ? 's:sfx-off' : 's:sfx-on';
-      const soundHint = `${DIM}${musicLabel}  ${sfxLabel}${RESET}`;
+      const cGreen = '\x1b[1;92m'; // bold bright green
+      const cYellow = '\x1b[1;93m'; // bold bright yellow
+      const cRed = '\x1b[1;91m'; // bold bright red
+      const musicLabel =
+        musicMode === 'on'
+          ? `${DIM}m:music(${cGreen}ON${RESET}${DIM}/quiet/off)`
+          : musicMode === 'quiet'
+            ? `${DIM}m:music(on/${cYellow}QUIET${RESET}${DIM}/off)`
+            : `${DIM}m:music(on/quiet/${cRed}OFF${RESET}${DIM})`;
+      const sfxLabel = sfxOn
+        ? `${DIM}s:sfx(${cGreen}ON${RESET}${DIM}/off)`
+        : `${DIM}s:sfx(on/${cRed}OFF${RESET}${DIM})`;
+      const soundHint = `${musicLabel}  ${sfxLabel}${RESET}`;
       // Clear the area first to prevent trailing characters when label shrinks
-      term.moveTo(width - 24, height);
-      process.stdout.write(' '.repeat(24));
-      term.moveTo(width - 24, height);
+      term.moveTo(width - 40, height);
+      process.stdout.write(' '.repeat(40));
+      term.moveTo(width - 40, height);
       process.stdout.write(soundHint);
     }
 
@@ -156,7 +166,7 @@ export async function showTitleScreen(): Promise<void> {
 
       // Sound toggles (don't continue)
       if (key === 'm') {
-        toggleMusic();
+        cycleMusicMode();
         drawPromptAndSoundHint();
         return;
       }
