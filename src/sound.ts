@@ -105,7 +105,9 @@ function playLoop(): void {
 
     musicProcess = null;
     if (musicMode !== 'off') {
-      playLoop();
+      // Use setImmediate to ensure async recursion - prevents stack overflow
+      // if play-sound calls callback synchronously on error (no audio player found)
+      setImmediate(playLoop);
     }
   }) as ChildProcess;
 }
