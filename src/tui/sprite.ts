@@ -312,13 +312,14 @@ export class Sprite {
   }
 
   /**
-   * Shows an alert indicator for the specified duration
+   * Shows an alert indicator for the specified duration with an "hmm" sound
    *
    * @param durationMs - How long to show the alert indicator
    * @returns Promise that resolves when the indicator is cleared
    */
-  async alarmed(durationMs: number): Promise<void> {
+  async intrigued(durationMs: number): Promise<void> {
     this._indicator = 'alert';
+    playSfx('hmm');
     await this.delay(durationMs);
     this._indicator = null;
   }

@@ -1756,7 +1756,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     drawTiles(true);
 
     // Arbiter notices scroll (alert indicator)
-    await arbiterSprite.alarmed(1500);
+    await arbiterSprite.intrigued(1500);
     drawTiles(true);
 
     // Entrance complete
@@ -1775,10 +1775,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     // If we're already waiting (arbiter started before entrance finished),
     // trigger the animations now
     if (state.waitingFor !== 'none') {
-      const target = state.waitingFor === 'arbiter' ? arbiterSprite : demons[0];
-      if (target) {
-        target.hop(6);
-      }
       smokeSprite.startBubbling();
       drawTiles(true);
       drawChat(true);
@@ -2058,12 +2054,6 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     // Skip animations during entrance sequence
     if (!entranceComplete) return;
-
-    // Hop for 3 seconds (6 hops)
-    const target = waitingFor === 'arbiter' ? arbiterSprite : demons[0];
-    if (target) {
-      target.hop(6); // Fire and forget
-    }
 
     // Start cauldron bubbling
     smokeSprite.startBubbling();

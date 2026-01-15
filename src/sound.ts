@@ -51,6 +51,7 @@ export const SFX = {
   menuRight: 'menu-right.wav',
   menuSelect: 'menu-select.wav',
   quickNotice: 'quick-notice.wav',
+  hmm: 'hmm.wav',
 } as const;
 
 /**

@@ -133,8 +133,8 @@ async function runDemoSequence(): Promise<void> {
   await arbiter.walk({ row: 2, col: 3 });
   await delay(300);
 
-  // Arbiter notices scroll (alarmed)
-  await arbiter.alarmed(1500);
+  // Arbiter notices scroll (intrigued)
+  await arbiter.intrigued(1500);
   await delay(500);
 
   // Demo summon sequence - arbiter walks to fire for summoning
