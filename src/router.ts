@@ -879,7 +879,7 @@ Your task now is to achieve COMPLETE UNDERSTANDING before any work begins. This 
 
 1. **STUDY THE SCROLL** - Read every word. Understand the intent, not just the surface requirements.
 
-2. **INVESTIGATE THE CODEBASE** - Use your read tools extensively. Understand the current state, architecture, patterns, and constraints. See what exists. See what's missing.
+2. **INVESTIGATE THE CODEBASE** - Use Explore agents (Task tool with subagent_type="Explore") to investigate the codebase. They can search, read files, and return summaries without consuming your context. Understand the current state, architecture, patterns, and constraints. See what exists. See what's missing.
 
 3. **IDENTIFY GAPS AND AMBIGUITIES** - What's unclear? What assumptions are being made? What edge cases aren't addressed? What could go wrong?
 
@@ -1206,11 +1206,10 @@ Take your time. This phase determines everything that follows.`
       while (true) {
         try {
           for await (const message of currentGenerator) {
-            // Reset retries on each successful message
-            retries = 0;
             await this.handleArbiterMessage(message);
           }
-          // Successfully finished processing
+          // Successfully finished processing - reset retries only after full completion
+          retries = 0;
           break;
         } catch (error: unknown) {
           // Log ALL errors to crash report file - no filtering
@@ -1342,9 +1341,6 @@ Take your time. This phase determines everything that follows.`
     while (true) {
       try {
         for await (const message of currentGenerator) {
-          // Reset retries on each successful message
-          retries = 0;
-
           // Update activity time on ANY SDK message (including subagent results)
           // This prevents false timeouts when orchestrator delegates to Task subagents
           if (this.currentOrchestratorSession) {
@@ -1353,7 +1349,8 @@ Take your time. This phase determines everything that follows.`
 
           await this.handleOrchestratorMessage(message);
         }
-        // Successfully finished processing
+        // Successfully finished processing - reset retries only after full completion
+        retries = 0;
         break;
       } catch (error: unknown) {
         // Log ALL errors to crash report file - no filtering
