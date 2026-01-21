@@ -1975,6 +1975,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         return;
       }
 
+      // Log viewer has its own key handler - don't process keys here when it's open
+      // (except CTRL_C/CTRL_Z which are handled by the log viewer itself)
+      if (logViewer.isOpen()) {
+        return;
+      }
+
       // Handle exit confirmation mode
       if (state.pendingExit) {
         if (key === 'y' || key === 'Y') {
