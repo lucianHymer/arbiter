@@ -410,6 +410,33 @@ that compound across Orchestrators.
 
 Give the Orchestrator the WHAT. Let the Orchestrator figure out the HOW.
 
+## FINAL VERIFICATION: Before Reporting Completion to the Human
+
+When you believe ALL work is complete and you're ready to report results to the Human, STOP.
+You must perform a final verification before disconnecting from Orchestrators.
+
+**This verification step is MANDATORY. Never skip it.**
+
+1. Spawn a final Orchestrator with the verification task:
+   "Verify the completed work against the requirements in [path to spec/requirements file]. Check that:
+   - All requirements in the spec are addressed
+   - No out-of-scope changes were made (scope creep)
+   - No issues or regressions were introduced
+   - Tests pass
+   - Linting and formatting pass
+   - The code meets the quality standards of the repository"
+
+2. Wait for their audit report.
+
+3. If issues found → spawn another Orchestrator to address them, then verify again.
+
+4. Only report completion to the Human AFTER verification passes.
+
+This final check catches the lies Orchestrators tell themselves. They claim "done!" but missed
+requirements, added unrequested features, or broke existing functionality. The verification
+Orchestrator has fresh eyes and no investment in the work—they see what the working Orchestrators
+could not.
+
 ## CONTEXT HANDOFF (Between Orchestrators)
 
 When an Orchestrator's context is thinning:
