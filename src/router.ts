@@ -678,8 +678,8 @@ export class Router {
       this.arbiterAbortController = null;
     }
 
-    // Clean up orchestrator using the unified method
-    this.cleanupOrchestrator();
+    // Clean up orchestrator using the unified method (dismiss demons on shutdown)
+    this.cleanupOrchestrator(true);
 
     this.arbiterQuery = null;
   }
@@ -687,8 +687,11 @@ export class Router {
   /**
    * Clean up the current orchestrator session
    * Called when: spawning new orchestrator, disconnect, timeout, shutdown
+   * @param dismissDemons - Whether to visually dismiss demon sprites (default: false)
+   *                        Set to true for explicit release or shutdown
+   *                        Set to false when replacing with a new orchestrator (accumulating)
    */
-  private cleanupOrchestrator(): void {
+  private cleanupOrchestrator(dismissDemons: boolean = false): void {
     // Stop watchdog timer
     this.stopWatchdog();
 
@@ -719,7 +722,10 @@ export class Router {
     this.callbacks.onContextUpdate(this.state.arbiterContextPercent, null);
 
     // 6. Notify TUI about orchestrator disconnect (for tile scene)
-    this.callbacks.onOrchestratorDisconnect?.();
+    //    Only dismiss demons on explicit release or shutdown
+    if (dismissDemons) {
+      this.callbacks.onOrchestratorDisconnect?.();
+    }
   }
 
   /**
@@ -1113,8 +1119,8 @@ Take your time. This phase determines everything that follows.`
         break;
 
       case 'release_orchestrators':
-        // Cleanup orchestrator, message goes to human
-        this.cleanupOrchestrator();
+        // Cleanup orchestrator and dismiss all demon sprites
+        this.cleanupOrchestrator(true);
         break;
 
       case 'musings':
