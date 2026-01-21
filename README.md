@@ -13,16 +13,21 @@ arbiter
 
 Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) login (run `claude` once to authenticate).
 
-Come with a requirements doc—a markdown file that fully describes what you want built. The more detail, the better.
+## Usage
+
+Arbiter is for one-shotting apps or features too big for a single Claude Code session. Come with a plan, not a question.
+
+Prepare your requirements first: a detailed markdown file describing what you want. Use Claude Code to help plan. Then bring that plan to Arbiter.
 
 ## How It Works
 
 ```
-You → Arbiter → Orchestrators → Subagents
+You ↔ Arbiter ↔ Orchestrators ↔ Subagents
 ```
 
-**The Arbiter** holds your vision. It clarifies requirements, delegates work, and coordinates all handoffs. It never does work directly—it manages.
+It's fractal: the same delegation pattern as subagents in Claude Code. Arbiter just adds another level using a second agent.
 
+**The Arbiter** holds your vision. It clarifies requirements, delegates work, and coordinates all handoffs. 
 **Orchestrators** are summoned workers. They dialogue with the Arbiter before starting and after finishing. They work until context fills, then hand back to the Arbiter for the next worker.
 
 **Subagents** do the actual file edits, searches, and commands.
@@ -31,9 +36,11 @@ The result: millions of effective context tokens. Many hours of work under one u
 
 ## Conceits
 
-1. **Conversational handoff beats preparation.** You can never fully brief someone upfront. The dialogue at transitions—onboarding and wrap-up—is where understanding actually transfers.
+1. **Conversational handoff beats static handoff.** Static briefs get misinterpreted. Dialogue finds alignment. The transitions—onboarding and wrap-up—are where understanding actually transfers.
 
 2. **Coherence beats compression.** Compacting is just lossy handoff to yourself. One context that never summarizes will outperform a larger context that forgets.
+
+3. **Ritual creates intention.** The gamification is a forcing function for intentionality. One does not summon the Arbiter lightly.
 
 ## Controls
 
@@ -53,9 +60,8 @@ Vim-like control modes.
 ## CLI Options
 
 ```bash
-arbiter                     # Start fresh
-arbiter ./requirements.md   # Load requirements file
-arbiter --resume            # Resume previous session (if <24h old)
+arbiter            # Start fresh
+arbiter --resume   # Resume previous session (if <24h old)
 ```
 
 ## Troubleshooting
