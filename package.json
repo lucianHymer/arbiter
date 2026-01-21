@@ -20,7 +20,8 @@
     "tui",
     "cli"
   ],
-  "license": "MIT",
+  "author": "Lucian Hymer LLC",
+  "license": "FSL-1.1-MIT",
   "engines": {
     "node": ">=18.0.0"
   },
