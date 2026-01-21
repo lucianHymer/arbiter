@@ -58,6 +58,15 @@ arbiter ./requirements.md   # Load requirements file
 arbiter --resume            # Resume previous session (if <24h old)
 ```
 
+## Troubleshooting
+
+If the TUI gets into a funky state (frozen, weird rendering, unresponsive), you can often fix it by suspending and resuming:
+
+1. Press `Ctrl+Z` to suspend
+2. Type `fg` and press Enter to resume
+
+This resets the terminal state and redraws everything. Similar to the fix for Claude Code terminal issues.
+
 ## Disclaimer
 
 This software runs AI agents with unrestricted system access (`bypassPermissions`). It can read, write, and execute anything on your machine.
