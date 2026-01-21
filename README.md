@@ -81,6 +81,13 @@ This software runs AI agents with unrestricted system access (`bypassPermissions
 
 Designed for development machines and controlled environments—not production servers with sensitive data.
 
+## Credits
+
+- Built on [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
+- Music: [Hail the Arbiter](https://opengameart.org/content/hail-the-arbiter) (yes, just serendipity)
+- Tileset: [16x16 Fantasy Tileset](https://opengameart.org/content/16x16-fantasy-tileset)
+- Sound Effects: [512 Sound Effects (8-bit style)](https://opengameart.org/content/512-sound-effects-8-bit-style)
+
 ## License
 
 [FSL-1.1-MIT](LICENSE) — Free to use, modify, and share. Just don't use it to compete with Arbiter. Converts to MIT on 2027-01-21.
