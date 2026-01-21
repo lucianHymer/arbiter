@@ -17,7 +17,7 @@ Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) login (ru
 
 Arbiter is for one-shotting apps or features too big for a single Claude Code session. Come with a plan, not a question.
 
-Prepare your requirements first: a detailed markdown file describing what you want. Use Claude Code to help plan. Then bring that plan to Arbiter.
+Prepare your requirements first. A detailed markdown file describing what you want. Use Claude Code to help plan, then bring that plan to Arbiter.
 
 ## How It Works
 
@@ -27,12 +27,13 @@ You ↔ Arbiter ↔ Orchestrators ↔ Subagents
 
 It's fractal: the same delegation pattern as subagents in Claude Code. Arbiter just adds another level using a second agent.
 
-**The Arbiter** holds your vision. It clarifies requirements, delegates work, and coordinates all handoffs. 
+**The Arbiter** holds your vision. It clarifies requirements, delegates work, and coordinates all handoffs.
+
 **Orchestrators** are summoned workers. They dialogue with the Arbiter before starting and after finishing. They work until context fills, then hand back to the Arbiter for the next worker.
 
 **Subagents** do the actual file edits, searches, and commands.
 
-The result: millions of effective context tokens. Many hours of work under one unbroken understanding.
+The result is millions of effective context tokens. Many hours of work under one unbroken understanding.
 
 ## Conceits
 
