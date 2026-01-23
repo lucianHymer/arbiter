@@ -22,9 +22,11 @@ import {
 import { createRouterCallbacks } from './callbacks.js';
 import { DEBUG_LOG_PATH } from './constants.js';
 import { createLogViewer, type LogViewer } from './logViewer.js';
+import { createQuestLog, type QuestLog } from './questLog.js';
 import { createRequirementsOverlay, type RequirementsOverlay } from './requirementsOverlay.js';
 import { createScene, renderScene, SCENE_HEIGHT, SCENE_WIDTH } from './scene.js';
 import { Sprite } from './sprite.js';
+import { createTaskWatcher, type TaskWatcher } from './taskWatcher.js';
 import { exitTerminal } from './terminal-cleanup.js';
 import {
   CHAR_HEIGHT,
@@ -1033,6 +1035,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       requirementsOverlay.draw();
     } else {
       drawTiles(true);
+      // Draw quest log overlay if visible
+      if (questLog?.isVisible()) {
+        questLog.draw();
+      }
       drawChat(true);
       drawContext(true);
       drawStatus(true);
@@ -1142,6 +1148,24 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     },
   });
 
+  // Initialize task watcher for shared task list monitoring
+  const taskWatcher: TaskWatcher = createTaskWatcher();
+
+  // Initialize quest log overlay (floating task panel)
+  const questLog: QuestLog = createQuestLog({
+    term,
+    getTileset: () => state.tileset,
+    getLayout: () => getLayout(state.inputBuffer, state.mode),
+    taskWatcher,
+  });
+
+  // Wire up task updates to redraw quest log when visible
+  taskWatcher.onUpdate(() => {
+    if (questLog.isVisible() && state.drawingEnabled && process.stdout.isTTY) {
+      questLog.draw();
+    }
+  });
+
   // ============================================================================
   // Helper Functions
   // ============================================================================
@@ -1249,6 +1273,24 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   // ============================================================================
 
   function handleKeypress(key: string) {
+    // Handle quest log keys first when visible
+    if (questLog.isVisible()) {
+      if (questLog.handleKey(key)) {
+        if (!questLog.isVisible()) {
+          // Quest log was closed - redraw tiles
+          drawTiles(true);
+        } else {
+          // Quest log still visible - redraw it
+          questLog.draw();
+        }
+        return;
+      }
+      // If quest log didn't handle the key, fall through to normal handling
+      // but close the quest log first
+      questLog.hide();
+      drawTiles(true);
+    }
+
     if (state.mode === 'INSERT') {
       handleInsertModeKey(key);
     } else {
@@ -1607,6 +1649,16 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         logViewer.open();
         break;
 
+      case 't':
+        // Toggle quest log overlay
+        questLog.toggle();
+        if (questLog.isVisible()) {
+          questLog.draw();
+        } else {
+          drawTiles(true); // Redraw tiles to clear the overlay
+        }
+        break;
+
       case 'm':
         // Toggle music
         cycleMusicMode();
@@ -1649,6 +1701,10 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Draw if waiting or if any sprite has an active animation
       if (state.waitingFor !== 'none' || hasActiveAnimations()) {
         drawTiles();
+        // Draw quest log overlay if visible
+        if (questLog.isVisible()) {
+          questLog.draw();
+        }
         // Only update chat when waiting (not for sprite-only animations)
         if (state.waitingFor !== 'none') {
           drawChat(); // Update chat working indicator
@@ -1938,6 +1994,9 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     startAnimationLoop();
     startAnimation();
 
+    // Start task watcher for quest log
+    taskWatcher.start();
+
     // Always run the full entrance sequence
     // Human walks in, both characters hop, arbiter walks to human
     // Requirements overlay shows AFTER entrance completes (if no CLI arg)
@@ -2025,6 +2084,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     stopAnimationLoop();
     stopAnimation();
+    taskWatcher.stop();
     exitTerminal();
 
     // Print session IDs on exit

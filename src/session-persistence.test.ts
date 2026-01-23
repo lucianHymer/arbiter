@@ -112,6 +112,7 @@ describe('session-persistence', () => {
         arbiterSessionId: 'arbiter-123',
         orchestratorSessionId: 'orch-456',
         orchestratorNumber: 2,
+        taskListId: 'task-list-789',
         savedAt: new Date().toISOString(),
       };
 
@@ -129,6 +130,7 @@ describe('session-persistence', () => {
         arbiterSessionId: 'arbiter-123',
         orchestratorSessionId: null,
         orchestratorNumber: null,
+        taskListId: null,
         savedAt: staleTime.toISOString(),
       };
 
@@ -146,6 +148,7 @@ describe('session-persistence', () => {
         arbiterSessionId: 'arbiter-123',
         orchestratorSessionId: null,
         orchestratorNumber: null,
+        taskListId: null,
         savedAt: exactlyOneDayAgo.toISOString(),
       };
 

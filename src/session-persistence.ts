@@ -5,6 +5,7 @@ export interface PersistedSession {
   arbiterSessionId: string;
   orchestratorSessionId: string | null;
   orchestratorNumber: number | null;
+  taskListId: string | null; // Shared task list ID for this session
   savedAt: string; // ISO timestamp
 }
 
@@ -18,12 +19,14 @@ export function saveSession(
   arbiterSessionId: string,
   orchestratorSessionId: string | null,
   orchestratorNumber: number | null,
+  taskListId: string | null = null,
 ): void {
   try {
     const sessionData: PersistedSession = {
       arbiterSessionId,
       orchestratorSessionId,
       orchestratorNumber,
+      taskListId,
       savedAt: new Date().toISOString(),
     };
 

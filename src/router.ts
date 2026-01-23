@@ -1300,6 +1300,7 @@ Take your time. This phase determines everything that follows.`
             message.session_id,
             this.currentOrchestratorSession?.sessionId ?? null,
             this.currentOrchestratorSession?.number ?? null,
+            process.env.CLAUDE_CODE_TASK_LIST_ID ?? null,
           );
         }
         break;
@@ -1445,6 +1446,7 @@ Take your time. This phase determines everything that follows.`
             this.state.arbiterSessionId!,
             message.session_id,
             this.currentOrchestratorSession?.number ?? null,
+            process.env.CLAUDE_CODE_TASK_LIST_ID ?? null,
           );
         }
         break;

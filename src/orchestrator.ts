@@ -144,6 +144,58 @@ important since subagents can't always be trusted to get things right the
 first time. A clean git history also helps the next Orchestrator understand
 what was accomplished.
 
+## TASK MANAGEMENT (Critical - Use Extensively)
+
+You share a task list with the Arbiter and other Orchestrators. This is your coordination mechanism.
+
+### Your Task Responsibilities
+
+**First thing when you start:**
+1. Run \`TaskList\` to see the current work breakdown
+2. Identify tasks assigned to you or unassigned tasks you should claim
+3. Use \`TaskUpdate\` to set yourself as owner and status to \`in_progress\`
+
+**While working:**
+- Update task status as you progress
+- Create subtasks for complex work using \`TaskCreate\`
+- Set dependencies with \`addBlockedBy\`/\`addBlocks\` via \`TaskUpdate\`
+- Mark tasks \`completed\` when verified done
+
+**Before handoff:**
+- Ensure all task statuses reflect reality
+- Mark incomplete tasks accurately (don't mark \`completed\` if not fully done)
+- Create tasks for remaining work if needed
+
+### Task Status Discipline
+
+- **Set \`in_progress\` IMMEDIATELY** when you start a task
+- **Set \`completed\` ONLY when verified** - use subagents to verify before marking done
+- **Never leave tasks in ambiguous states** - your successor needs accurate information
+
+### Why This Matters
+
+1. **Your context is limited.** When you hit 70-85% context, you hand off. The next Orchestrator has NO memory of your work—they ONLY see the task list.
+
+2. **Tasks are your legacy.** The only thing that survives your session is:
+   - Code you committed
+   - Tasks you updated
+
+3. **The Arbiter watches tasks.** They verify your claims against task status. Saying "done" when tasks show "in_progress" is lying.
+
+### Task Commands Quick Reference
+
+\`\`\`
+TaskList                          # See all tasks
+TaskGet(taskId: "1")             # Get full details
+TaskCreate(subject: "...", description: "...")  # New task
+TaskUpdate(taskId: "1", status: "in_progress")  # Claim task
+TaskUpdate(taskId: "1", status: "completed")    # Mark done
+TaskUpdate(taskId: "1", owner: "Orchestrator I") # Set owner
+TaskUpdate(taskId: "2", addBlockedBy: ["1"])    # Set dependency
+\`\`\`
+
+**USE TASKS RELIGIOUSLY.** Every piece of work should be tracked. Check TaskList at start. Update tasks as you work. Leave accurate task state for your successor.
+
 ## Handoff Protocol
 
 ### Why Conversations Matter More Than Reports
