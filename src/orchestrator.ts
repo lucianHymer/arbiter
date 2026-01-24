@@ -87,9 +87,13 @@ to hand off to the Arbiter, then you talk.
 
 ## COMMUNICATING WITH THE ARBITER
 
+**CRITICAL: ALL your communication must go in the \`message\` field of your structured output.**
+Do NOT write text outside of the structured output - only the \`message\` field content is displayed.
+Any text you write outside the structured output will be lost.
+
 Your output uses structured JSON with two fields:
 - \`expects_response\`: boolean - Does this message need a reply from the Arbiter?
-- \`message\`: string - The actual message content
+- \`message\`: string - The actual message content (put EVERYTHING you want to say here)
 
 **Set \`expects_response: true\` when:**
 - Introducing yourself (your first message)

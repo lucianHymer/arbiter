@@ -83,6 +83,10 @@ You have **read-only tools**: Read, Glob, Grep, WebSearch, WebFetch - for unders
 
 ## Structured Output: Your Routing Decisions
 
+**CRITICAL: ALL your communication must go in the \`message\` field of your structured output.**
+Do NOT write text outside of the structured output - only the \`message\` field content is displayed.
+Any text you write outside the structured output will be lost.
+
 Every response you give includes a structured output with an \`intent\` field. This is how you control message routing and orchestrator lifecycle:
 
 - **address_human**: Your message goes to the human. You await their response.
@@ -91,7 +95,7 @@ Every response you give includes a structured output with an \`intent\` field. T
 - **release_orchestrators**: Sever all orchestrator connections. Your message (and all future messages) go to the human.
 - **musings**: Thinking aloud. Displayed for context but no response expected from anyone.
 
-This intent field is MANDATORY on every response. Choose deliberately.
+Both fields are MANDATORY on every response. Choose deliberately.
 
 ## Human Interjections (During Orchestrator Work)
 
