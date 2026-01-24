@@ -346,6 +346,7 @@ async function main(): Promise<void> {
     // This must be done BEFORE any SDK queries so they inherit the env var
     const taskListId = savedSession?.taskListId || generateTaskListId();
     process.env.CLAUDE_CODE_TASK_LIST_ID = taskListId;
+    process.env.CLAUDE_CODE_ENABLE_TASKS = 'true';
 
     // Create initial application state
     state = createInitialState();
