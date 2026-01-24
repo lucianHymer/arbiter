@@ -223,7 +223,13 @@ const OrchestratorOutputSchema = z.object({
 type OrchestratorOutput = z.infer<typeof OrchestratorOutputSchema>;
 
 // Convert to JSON Schema for SDK
-const orchestratorOutputJsonSchema = z.toJSONSchema(OrchestratorOutputSchema);
+// Strip $schema field which Zod 4 adds - the Anthropic API doesn't expect it
+function stripSchemaField(schema: Record<string, unknown>): Record<string, unknown> {
+  const { $schema, ...rest } = schema;
+  return rest;
+}
+
+const orchestratorOutputJsonSchema = stripSchemaField(z.toJSONSchema(OrchestratorOutputSchema));
 
 /**
  * Schema for Arbiter structured output
@@ -251,8 +257,8 @@ const ArbiterOutputSchema = z.object({
 
 type ArbiterOutput = z.infer<typeof ArbiterOutputSchema>;
 
-// Convert to JSON Schema for SDK
-const arbiterOutputJsonSchema = z.toJSONSchema(ArbiterOutputSchema);
+// Convert to JSON Schema for SDK (uses stripSchemaField helper defined above)
+const arbiterOutputJsonSchema = stripSchemaField(z.toJSONSchema(ArbiterOutputSchema));
 
 import {
   ARBITER_SYSTEM_PROMPT,
