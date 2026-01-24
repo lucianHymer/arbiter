@@ -15,7 +15,6 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk';
 import { query } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
 import { type PersistedSession, saveSession } from './session-persistence.js';
 
 // Helper for async delays
@@ -224,9 +223,7 @@ const OrchestratorOutputSchema = z.object({
 type OrchestratorOutput = z.infer<typeof OrchestratorOutputSchema>;
 
 // Convert to JSON Schema for SDK
-const orchestratorOutputJsonSchema = zodToJsonSchema(OrchestratorOutputSchema, {
-  $refStrategy: 'none',
-});
+const orchestratorOutputJsonSchema = z.toJSONSchema(OrchestratorOutputSchema);
 
 /**
  * Schema for Arbiter structured output
@@ -255,9 +252,7 @@ const ArbiterOutputSchema = z.object({
 type ArbiterOutput = z.infer<typeof ArbiterOutputSchema>;
 
 // Convert to JSON Schema for SDK
-const arbiterOutputJsonSchema = zodToJsonSchema(ArbiterOutputSchema, {
-  $refStrategy: 'none',
-});
+const arbiterOutputJsonSchema = z.toJSONSchema(ArbiterOutputSchema);
 
 import {
   ARBITER_SYSTEM_PROMPT,
