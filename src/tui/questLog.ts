@@ -1,13 +1,12 @@
 /**
  * Quest Log Overlay Module
  *
- * Displays a floating RPG-style quest tracker in the bottom-left corner of the tile scene.
- * Shows tasks from the shared task list with status indicators and owners.
+ * Full-screen roguelike-style task viewer with expand/collapse navigation.
+ * Similar to Caves of Qud quest log UI.
  */
 
 import type { Terminal } from 'terminal-kit';
 import type { Task, TaskWatcher } from './taskWatcher.js';
-import { CHAR_HEIGHT, extractTile, RESET, type RGB, renderTile, type Tileset } from './tileset.js';
 
 // ============================================================================
 // Types
@@ -15,12 +14,14 @@ import { CHAR_HEIGHT, extractTile, RESET, type RGB, renderTile, type Tileset } f
 
 export interface QuestLogDeps {
   term: Terminal;
-  getTileset: () => Tileset | null;
+  getTileset: () => unknown; // Not used in new implementation but kept for interface compat
   getLayout: () => LayoutInfo;
   taskWatcher: TaskWatcher;
 }
 
 export interface LayoutInfo {
+  width: number;
+  height: number;
   tileArea: {
     x: number;
     y: number;
@@ -48,14 +49,6 @@ export interface QuestLog {
 // Constants
 // ============================================================================
 
-// Dialogue box tile indices (for panel borders)
-const DIALOGUE_TILES = {
-  TOP_LEFT: 38,
-  TOP_RIGHT: 39,
-  BOTTOM_LEFT: 48,
-  BOTTOM_RIGHT: 49,
-};
-
 // Status indicators
 const STATUS_ICONS = {
   pending: '○',
@@ -63,18 +56,15 @@ const STATUS_ICONS = {
   completed: '●',
 };
 
-// Colors for status
-const STATUS_COLORS = {
-  pending: '\x1b[90m', // dim gray
-  in_progress: '\x1b[93m', // yellow
-  completed: '\x1b[92m', // green
-};
-
-// Max tasks to show (to fit in panel)
-const MAX_VISIBLE_TASKS = 8;
-
-// Panel dimensions (in tiles)
-const PANEL_WIDTH_TILES = 4;
+// Colors
+const DIM = '\x1b[2m';
+const RESET = '\x1b[0m';
+const CYAN = '\x1b[36m';
+const YELLOW = '\x1b[33m';
+const GREEN = '\x1b[32m';
+const WHITE = '\x1b[97m';
+const MAGENTA = '\x1b[35m';
+const INVERSE = '\x1b[7m';
 
 // ============================================================================
 // Factory Function
@@ -84,258 +74,118 @@ const PANEL_WIDTH_TILES = 4;
  * Creates a quest log overlay instance
  */
 export function createQuestLog(deps: QuestLogDeps): QuestLog {
-  const { term, getTileset, getLayout, taskWatcher } = deps;
+  const { term, getLayout, taskWatcher } = deps;
 
   // Internal state
   let visible = false;
   let scrollOffset = 0;
+  let selectedIndex = 0;
+  const expandedTasks: Set<string> = new Set(); // Task IDs that are expanded
 
   // ============================================================================
   // Helper Functions
   // ============================================================================
 
   /**
-   * Strip ANSI escape codes from a string
+   * Get status color for a task
    */
-  function stripAnsi(str: string): string {
-    // eslint-disable-next-line no-control-regex
-    return str.replace(/\x1b\[[0-9;]*m/g, '');
+  function getStatusColor(status: string): string {
+    switch (status) {
+      case 'completed':
+        return GREEN;
+      case 'in_progress':
+        return YELLOW;
+      default:
+        return DIM;
+    }
   }
 
   /**
-   * Create middle fill row for dialogue box (samples from left tile's middle column)
+   * Truncate text to fit width
    */
-  function createMiddleFill(leftTile: RGB[][], charRow: number): string {
-    const pixelRowTop = charRow * 2;
-    const pixelRowBot = pixelRowTop + 1;
-    const sampleX = 8; // Middle column
-
-    let result = '';
-    for (let x = 0; x < 16; x++) {
-      const topPixel = leftTile[pixelRowTop][sampleX];
-      const botPixel = leftTile[pixelRowBot]?.[sampleX] || topPixel;
-      result += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
-      result += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
-      result += '\u2584';
-    }
-    result += RESET;
-    return result;
+  function truncate(text: string, maxLen: number): string {
+    if (text.length <= maxLen) return text;
+    return text.slice(0, maxLen - 1) + '…';
   }
 
   /**
-   * Wrap text with consistent background color
+   * Wrap text to multiple lines
    */
-  function wrapTextWithBg(text: string, bgColor: string): string {
-    const bgMaintained = text.replace(/\x1b\[0m/g, `\x1b[0m${bgColor}`);
-    return bgColor + bgMaintained + RESET;
-  }
+  function wrapText(text: string, width: number): string[] {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
 
-  /**
-   * Create middle row border segments for panels taller than 2 tiles
-   */
-  function createMiddleRowBorders(
-    tileset: Tileset,
-    charRow: number,
-  ): { left: string; fill: string; right: string } {
-    const topLeftTile = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
-    const topRightTile = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
-
-    const actualCharRow = charRow % 4;
-    const pixelRowTop = 8 + actualCharRow * 2;
-    const pixelRowBot = pixelRowTop + 1;
-
-    let left = '';
-    for (let x = 0; x < 16; x++) {
-      const topPixel = topLeftTile[pixelRowTop][x];
-      const botPixel = topLeftTile[pixelRowBot]?.[x] || topPixel;
-      left += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
-      left += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
-      left += '\u2584';
-    }
-    left += RESET;
-
-    let right = '';
-    for (let x = 0; x < 16; x++) {
-      const topPixel = topRightTile[pixelRowTop][x];
-      const botPixel = topRightTile[pixelRowBot]?.[x] || topPixel;
-      right += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
-      right += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
-      right += '\u2584';
-    }
-    right += RESET;
-
-    const sampleX = 8;
-    const topPixel = topLeftTile[pixelRowTop][sampleX];
-    const botPixel = topLeftTile[pixelRowBot]?.[sampleX] || topPixel;
-    let fill = '';
-    for (let x = 0; x < 16; x++) {
-      fill += `\x1b[48;2;${topPixel.r};${topPixel.g};${topPixel.b}m`;
-      fill += `\x1b[38;2;${botPixel.r};${botPixel.g};${botPixel.b}m`;
-      fill += '\u2584';
-    }
-    fill += RESET;
-
-    return { left, fill, right };
-  }
-
-  /**
-   * Render a compact tile-bordered message panel
-   */
-  function renderPanel(
-    tileset: Tileset,
-    textLines: string[],
-    widthTiles: number,
-    heightTiles: number,
-  ): string[] {
-    const topLeft = extractTile(tileset, DIALOGUE_TILES.TOP_LEFT);
-    const topRight = extractTile(tileset, DIALOGUE_TILES.TOP_RIGHT);
-    const bottomLeft = extractTile(tileset, DIALOGUE_TILES.BOTTOM_LEFT);
-    const bottomRight = extractTile(tileset, DIALOGUE_TILES.BOTTOM_RIGHT);
-
-    const tlRendered = renderTile(topLeft);
-    const trRendered = renderTile(topRight);
-    const blRendered = renderTile(bottomLeft);
-    const brRendered = renderTile(bottomRight);
-
-    const middleTopRendered: string[] = [];
-    const middleBottomRendered: string[] = [];
-    for (let row = 0; row < CHAR_HEIGHT; row++) {
-      middleTopRendered.push(createMiddleFill(topLeft, row));
-      middleBottomRendered.push(createMiddleFill(bottomLeft, row));
-    }
-
-    const middleRowBorders: { left: string; fill: string; right: string }[] = [];
-    for (let row = 0; row < CHAR_HEIGHT; row++) {
-      middleRowBorders.push(createMiddleRowBorders(tileset, row));
-    }
-
-    const middleTiles = Math.max(0, widthTiles - 2);
-    const interiorWidth = middleTiles * 16;
-    const middleRows = Math.max(0, heightTiles - 2);
-
-    const bgSamplePixel = topLeft[8][8];
-    const textBgColor = `\x1b[48;2;${bgSamplePixel.r};${bgSamplePixel.g};${bgSamplePixel.b}m`;
-
-    const boxLines: string[] = [];
-
-    // Top row of tiles
-    for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
-      let line = tlRendered[charRow];
-      for (let m = 0; m < middleTiles; m++) {
-        line += middleTopRendered[charRow];
-      }
-      line += trRendered[charRow];
-      boxLines.push(line);
-    }
-
-    // Middle rows of tiles (for height > 2)
-    for (let middleRowIdx = 0; middleRowIdx < middleRows; middleRowIdx++) {
-      for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
-        const borders = middleRowBorders[charRow];
-        let line = borders.left;
-        for (let m = 0; m < middleTiles; m++) {
-          line += borders.fill;
-        }
-        line += borders.right;
-        boxLines.push(line);
-      }
-    }
-
-    // Bottom row of tiles
-    for (let charRow = 0; charRow < CHAR_HEIGHT; charRow++) {
-      let line = blRendered[charRow];
-      for (let m = 0; m < middleTiles; m++) {
-        line += middleBottomRendered[charRow];
-      }
-      line += brRendered[charRow];
-      boxLines.push(line);
-    }
-
-    // Place text lines in the interior
-    const boxHeight = CHAR_HEIGHT * heightTiles;
-    const interiorStartRow = 2;
-    const interiorEndRow = boxHeight - 3;
-
-    // Start from top of interior area (not centered, since we want scrollable list)
-    for (let i = 0; i < textLines.length; i++) {
-      const boxLineIndex = interiorStartRow + i;
-      if (boxLineIndex <= interiorEndRow && boxLineIndex < boxLines.length) {
-        let line = textLines[i];
-        let visibleLength = stripAnsi(line).length;
-
-        // Truncate if too long
-        if (visibleLength > interiorWidth - 2) {
-          let truncated = '';
-          let truncatedVisible = 0;
-          const maxLen = interiorWidth - 5;
-          for (let c = 0; c < line.length && truncatedVisible < maxLen; c++) {
-            truncated += line[c];
-            truncatedVisible = stripAnsi(truncated).length;
-          }
-          line = `${truncated}...`;
-          visibleLength = stripAnsi(line).length;
-        }
-
-        // Left-align with small padding
-        const padding = 1;
-        const rightPadding = Math.max(0, interiorWidth - padding - visibleLength);
-        const textContent = ' '.repeat(padding) + line + ' '.repeat(rightPadding);
-        const textWithBg = wrapTextWithBg(textContent, textBgColor);
-
-        const tileRowIdx = Math.floor(boxLineIndex / CHAR_HEIGHT);
-        const charRow = boxLineIndex % CHAR_HEIGHT;
-
-        let leftBorder: string;
-        let rightBorder: string;
-        if (tileRowIdx === 0) {
-          leftBorder = tlRendered[charRow];
-          rightBorder = trRendered[charRow];
-        } else if (tileRowIdx === heightTiles - 1) {
-          leftBorder = blRendered[charRow];
-          rightBorder = brRendered[charRow];
-        } else {
-          const borders = middleRowBorders[charRow];
-          leftBorder = borders.left;
-          rightBorder = borders.right;
-        }
-
-        boxLines[boxLineIndex] = leftBorder + textWithBg + rightBorder;
-      }
-    }
-
-    return boxLines;
-  }
-
-  /**
-   * Format a task for display
-   */
-  function formatTask(task: Task, maxWidth: number): string {
-    const icon = STATUS_ICONS[task.status] || '?';
-    const color = STATUS_COLORS[task.status] || '';
-
-    // Format owner (abbreviate orchestrator names)
-    let ownerTag = '';
-    if (task.owner) {
-      // Extract orchestrator number if it matches pattern
-      const orchMatch = task.owner.match(/[Oo]rchestrator\s*(\S+)/i);
-      if (orchMatch) {
-        ownerTag = ` \x1b[36m[${orchMatch[1]}]\x1b[0m`;
-      } else if (task.owner.toLowerCase().includes('arbiter')) {
-        ownerTag = ' \x1b[33m[A]\x1b[0m';
+    for (const word of words) {
+      if (currentLine.length + word.length + 1 <= width) {
+        currentLine += (currentLine ? ' ' : '') + word;
       } else {
-        ownerTag = ` \x1b[90m[${task.owner.substring(0, 3)}]\x1b[0m`;
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+    return lines;
+  }
+
+  /**
+   * Build the display lines for rendering
+   */
+  function buildDisplayLines(
+    tasks: Task[],
+    contentWidth: number,
+  ): { lines: string[]; taskLineMap: number[] } {
+    const lines: string[] = [];
+    const taskLineMap: number[] = []; // Maps line index to task index (-1 for non-task lines)
+
+    for (let taskIdx = 0; taskIdx < tasks.length; taskIdx++) {
+      const task = tasks[taskIdx];
+      const isSelected = taskIdx === selectedIndex;
+      const isExpanded = expandedTasks.has(task.id);
+      const statusIcon = STATUS_ICONS[task.status] || '?';
+      const statusColor = getStatusColor(task.status);
+      const expandIcon = isExpanded ? '[-]' : '[+]';
+
+      // Owner tag
+      let ownerTag = '';
+      if (task.owner) {
+        const orchMatch = task.owner.match(/[Oo]rchestrator\s*(\S+)/i);
+        if (orchMatch) {
+          ownerTag = ` ${CYAN}[Orch ${orchMatch[1]}]${RESET}`;
+        } else if (task.owner.toLowerCase().includes('arbiter')) {
+          ownerTag = ` ${YELLOW}[Arbiter]${RESET}`;
+        }
+      }
+
+      // Main task line
+      const prefix = `${MAGENTA}${expandIcon}${RESET} ${statusColor}${statusIcon}${RESET} `;
+      const subjectMaxLen = contentWidth - 12 - (task.owner ? 12 : 0);
+      const subject = truncate(task.subject, subjectMaxLen);
+
+      let line = `${prefix}${WHITE}${subject}${RESET}${ownerTag}`;
+
+      // Highlight selected line
+      if (isSelected) {
+        line = `${INVERSE}${line}${RESET}`;
+      }
+
+      lines.push(line);
+      taskLineMap.push(taskIdx);
+
+      // If expanded, show description indented
+      if (isExpanded && task.description) {
+        const descLines = wrapText(task.description, contentWidth - 6);
+        for (const descLine of descLines) {
+          lines.push(`${DIM}     ${descLine}${RESET}`);
+          taskLineMap.push(-1); // Description lines don't map to tasks
+        }
+        // Add a blank line after description
+        lines.push('');
+        taskLineMap.push(-1);
       }
     }
 
-    // Truncate subject if needed
-    const ownerLen = task.owner ? 5 : 0;
-    const maxSubjectLen = maxWidth - 4 - ownerLen; // icon + space + owner
-    let subject = task.subject;
-    if (subject.length > maxSubjectLen) {
-      subject = `${subject.substring(0, maxSubjectLen - 2)}..`;
-    }
-
-    return `${color}${icon}\x1b[0m ${subject}${ownerTag}`;
+    return { lines, taskLineMap };
   }
 
   // ============================================================================
@@ -343,68 +193,105 @@ export function createQuestLog(deps: QuestLogDeps): QuestLog {
   // ============================================================================
 
   /**
-   * Draw the quest log overlay
+   * Draw the quest log overlay (full screen)
    */
   function draw(): void {
     if (!visible) return;
 
-    const tileset = getTileset();
-    if (!tileset) return;
-
-    const tasks = taskWatcher.getTasks();
     const layout = getLayout();
+    const width = layout.width;
+    const height = layout.height;
+    const tasks = taskWatcher.getTasks();
 
-    // Build text lines for the panel
-    const textLines: string[] = [];
+    term.clear();
+
+    // Calculate counts
+    const completed = tasks.filter((t) => t.status === 'completed').length;
+    const inProgress = tasks.filter((t) => t.status === 'in_progress').length;
+    const pending = tasks.filter((t) => t.status === 'pending').length;
 
     // Header
-    textLines.push('\x1b[97;1mQuests\x1b[0m');
-    textLines.push(''); // Separator
+    term.moveTo(1, 1);
+    process.stdout.write(`${MAGENTA}${INVERSE} QUEST LOG ${RESET}`);
+    process.stdout.write(
+      `${DIM}  ${completed} complete · ${inProgress} in progress · ${pending} pending${RESET}`,
+    );
+
+    // Separator
+    term.moveTo(1, 2);
+    process.stdout.write(`${DIM}${'─'.repeat(width - 1)}${RESET}`);
+
+    const contentStartY = 3;
+    const contentHeight = height - 4; // Leave room for header (2) and footer (2)
+    const contentWidth = width - 2;
 
     if (tasks.length === 0) {
-      textLines.push('\x1b[90m(no active quests)\x1b[0m');
+      term.moveTo(2, contentStartY);
+      process.stdout.write(`${DIM}No active tasks${RESET}`);
     } else {
-      // Show tasks with scroll offset
-      const visibleTasks = tasks.slice(scrollOffset, scrollOffset + MAX_VISIBLE_TASKS);
-      const interiorWidth = (PANEL_WIDTH_TILES - 2) * 16;
+      // Build display lines
+      const { lines, taskLineMap } = buildDisplayLines(tasks, contentWidth);
 
-      for (const task of visibleTasks) {
-        textLines.push(formatTask(task, interiorWidth - 2));
-      }
-
-      // Show scroll indicator if there are more tasks
-      if (tasks.length > MAX_VISIBLE_TASKS) {
-        const moreCount = tasks.length - scrollOffset - MAX_VISIBLE_TASKS;
-        if (moreCount > 0) {
-          textLines.push(`\x1b[90m  +${moreCount} more...\x1b[0m`);
+      // Find which line the selected task starts on
+      let selectedLineStart = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (taskLineMap[i] === selectedIndex) {
+          selectedLineStart = i;
+          break;
         }
       }
+
+      // Adjust scroll to keep selection visible
+      if (selectedLineStart < scrollOffset) {
+        scrollOffset = selectedLineStart;
+      } else if (selectedLineStart >= scrollOffset + contentHeight) {
+        scrollOffset = selectedLineStart - contentHeight + 1;
+      }
+
+      // Clamp scroll offset
+      const maxScroll = Math.max(0, lines.length - contentHeight);
+      scrollOffset = Math.min(scrollOffset, maxScroll);
+      scrollOffset = Math.max(0, scrollOffset);
+
+      // Render visible lines
+      for (let i = 0; i < contentHeight; i++) {
+        const lineIdx = scrollOffset + i;
+        term.moveTo(2, contentStartY + i);
+        if (lineIdx < lines.length) {
+          const line = lines[lineIdx];
+          // Truncate to fit width
+          process.stdout.write(line.slice(0, width - 2));
+        }
+      }
+
+      // Scroll indicator
+      if (lines.length > contentHeight) {
+        const scrollPercent = Math.round((scrollOffset / maxScroll) * 100);
+        term.moveTo(width - 10, contentStartY);
+        process.stdout.write(`${DIM}${scrollPercent}%${RESET}`);
+      }
     }
 
-    // Calculate panel height based on content (minimum 2 tiles)
-    const contentRows = textLines.length + 2; // +2 for top/bottom border interior
-    const heightTiles = Math.max(2, Math.ceil(contentRows / CHAR_HEIGHT) + 1);
+    // Footer separator
+    term.moveTo(1, height - 1);
+    process.stdout.write(`${DIM}${'─'.repeat(width - 1)}${RESET}`);
 
-    // Render the panel
-    const panelLines = renderPanel(tileset, textLines, PANEL_WIDTH_TILES, heightTiles);
-
-    // Position in bottom-left corner of the scene
-    const panelX = layout.tileArea.x;
-    const panelY = layout.tileArea.y + layout.tileArea.height - panelLines.length;
-
-    // Draw panel
-    for (let i = 0; i < panelLines.length; i++) {
-      term.moveTo(panelX, panelY + i);
-      process.stdout.write(panelLines[i] + RESET);
-    }
+    // Footer with keybinds
+    term.moveTo(1, height);
+    process.stdout.write(
+      `${MAGENTA}${INVERSE} ↑/k ↓/j:navigate  →/l:expand  ←/h:collapse  space:toggle  q/t:close ${RESET}`,
+    );
   }
 
   /**
    * Toggle visibility
    */
   function toggle(): void {
-    visible = !visible;
-    scrollOffset = 0;
+    if (visible) {
+      hide();
+    } else {
+      show();
+    }
   }
 
   /**
@@ -420,6 +307,9 @@ export function createQuestLog(deps: QuestLogDeps): QuestLog {
   function show(): void {
     visible = true;
     scrollOffset = 0;
+    selectedIndex = 0;
+    // Start with all collapsed
+    expandedTasks.clear();
   }
 
   /**
@@ -436,27 +326,89 @@ export function createQuestLog(deps: QuestLogDeps): QuestLog {
     if (!visible) return false;
 
     const tasks = taskWatcher.getTasks();
-
-    if (key === 't' || key === 'ESCAPE') {
-      hide();
-      return true;
-    }
-
-    if (key === 'j' || key === 'DOWN') {
-      if (scrollOffset < tasks.length - MAX_VISIBLE_TASKS) {
-        scrollOffset++;
+    if (tasks.length === 0) {
+      // No tasks, only handle close
+      if (key === 't' || key === 'q' || key === 'ESCAPE') {
+        hide();
+        return true;
       }
-      return true;
+      return false;
     }
 
-    if (key === 'k' || key === 'UP') {
-      if (scrollOffset > 0) {
-        scrollOffset--;
-      }
-      return true;
-    }
+    const currentTask = tasks[selectedIndex];
 
-    return false;
+    switch (key) {
+      case 't':
+      case 'q':
+      case 'ESCAPE':
+        hide();
+        return true;
+
+      case 'j':
+      case 'DOWN':
+        // Move selection down
+        if (selectedIndex < tasks.length - 1) {
+          selectedIndex++;
+          draw();
+        }
+        return true;
+
+      case 'k':
+      case 'UP':
+        // Move selection up
+        if (selectedIndex > 0) {
+          selectedIndex--;
+          draw();
+        }
+        return true;
+
+      case 'l':
+      case 'RIGHT':
+      case 'ENTER':
+        // Expand selected task
+        if (currentTask && !expandedTasks.has(currentTask.id)) {
+          expandedTasks.add(currentTask.id);
+          draw();
+        }
+        return true;
+
+      case 'h':
+      case 'LEFT':
+        // Collapse selected task
+        if (currentTask && expandedTasks.has(currentTask.id)) {
+          expandedTasks.delete(currentTask.id);
+          draw();
+        }
+        return true;
+
+      case 'g':
+        // Go to top
+        selectedIndex = 0;
+        scrollOffset = 0;
+        draw();
+        return true;
+
+      case 'G':
+        // Go to bottom
+        selectedIndex = tasks.length - 1;
+        draw();
+        return true;
+
+      case ' ':
+        // Toggle expand/collapse
+        if (currentTask) {
+          if (expandedTasks.has(currentTask.id)) {
+            expandedTasks.delete(currentTask.id);
+          } else {
+            expandedTasks.add(currentTask.id);
+          }
+          draw();
+        }
+        return true;
+
+      default:
+        return false;
+    }
   }
 
   return {
