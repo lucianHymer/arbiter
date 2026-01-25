@@ -494,6 +494,13 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
+   * Check if any full-screen overlay is active (should skip main screen rendering)
+   */
+  function isOverlayActive(): boolean {
+    return logViewer.isOpen() || requirementsOverlay?.isActive() || questLog.isVisible();
+  }
+
+  /**
    * Draw tile scene
    * @param force Force redraw even if animation frame unchanged
    */
@@ -501,8 +508,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (!force && state.animationFrame === tracker.lastTileFrame) return;
     tracker.lastTileFrame = state.animationFrame;
 
-    // Skip drawing if log viewer or requirements overlay is open (but state still updates)
-    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+    // Skip drawing if any overlay is open (but state still updates)
+    if (isOverlayActive()) return;
 
     if (!state.tileset) return;
     const layout = getLayout(state.inputBuffer, state.mode);
@@ -617,8 +624,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw chat area - only redraws if messages or scroll changed
    */
   function drawChat(force: boolean = false) {
-    // Skip drawing if log viewer or requirements overlay is open
-    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+    // Skip drawing if any overlay is open
+    if (isOverlayActive()) return;
 
     const scrollChanged = state.scrollOffset !== tracker.lastScrollOffset;
     const messagesChanged = state.messages.length !== tracker.lastMessageCount;
@@ -681,8 +688,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw context bar - shows Arbiter %, Orchestrator %, and tool info
    */
   function drawContext(force: boolean = false) {
-    // Skip drawing if log viewer or requirements overlay is open
-    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+    // Skip drawing if any overlay is open
+    if (isOverlayActive()) return;
 
     const contextChanged =
       state.arbiterContextPercent !== tracker.lastContextPercent ||
@@ -725,8 +732,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * Draw task bar - shows current task progress summary
    */
   function drawTaskBar(force: boolean = false) {
-    // Skip drawing if log viewer or requirements overlay is open
-    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+    // Skip drawing if any overlay is open
+    if (isOverlayActive()) return;
 
     const tasks = taskWatcher.getTasks();
     const completed = tasks.filter((t) => t.status === 'completed').length;
@@ -780,8 +787,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
    * SCROLL mode: two lines with vertical alignment
    */
   function drawStatus(force: boolean = false) {
-    // Skip drawing if log viewer or requirements overlay is open
-    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+    // Skip drawing if any overlay is open
+    if (isOverlayActive()) return;
 
     const modeChanged = state.mode !== tracker.lastMode;
 
@@ -1348,18 +1355,16 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     if (questLog.isVisible()) {
       if (questLog.handleKey(key)) {
         if (!questLog.isVisible()) {
-          // Quest log was closed - redraw tiles
-          drawTiles(true);
-        } else {
-          // Quest log still visible - redraw it
-          questLog.draw();
+          // Quest log was closed - full redraw to restore main screen
+          fullDraw();
         }
+        // If still visible, questLog.handleKey already called draw()
         return;
       }
       // If quest log didn't handle the key, fall through to normal handling
       // but close the quest log first
       questLog.hide();
-      drawTiles(true);
+      fullDraw();
     }
 
     if (state.mode === 'INSERT') {
@@ -1726,7 +1731,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         if (questLog.isVisible()) {
           questLog.draw();
         } else {
-          drawTiles(true); // Redraw tiles to clear the overlay
+          fullDraw(); // Full redraw to restore main screen
         }
         break;
 
@@ -1769,13 +1774,12 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
       // Skip actual drawing when disabled (suspended/detached) or no TTY
       if (!state.drawingEnabled || !process.stdout.isTTY) return;
 
+      // Skip animation updates when any overlay is active
+      if (isOverlayActive()) return;
+
       // Draw if waiting or if any sprite has an active animation
       if (state.waitingFor !== 'none' || hasActiveAnimations()) {
         drawTiles();
-        // Draw quest log overlay if visible
-        if (questLog.isVisible()) {
-          questLog.draw();
-        }
         // Only update chat when waiting (not for sprite-only animations)
         if (state.waitingFor !== 'none') {
           drawChat(); // Update chat working indicator
