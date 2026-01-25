@@ -130,6 +130,8 @@ interface RedrawTracker {
   lastInputHeight: number;
   lastShowToolIndicator: boolean;
   lastToolCount: number;
+  // Task bar tracking
+  lastTaskInfo: string;
 }
 
 // ============================================================================
@@ -227,13 +229,14 @@ function getLayout(inputText: string = '', mode: 'INSERT' | 'NORMAL' = 'NORMAL')
   // Status bar: 1 line in INSERT mode, 2 lines in NORMAL/SCROLL mode
   const statusLines = mode === 'INSERT' ? 1 : 2;
 
-  // Input area at bottom, status bar above it, context bar above that, chat fills remaining space
+  // Input area at bottom, status bar above it, context bar above that, task bar above that, chat fills remaining
   const inputY = height - inputLines + 1; // +1 because 1-indexed
   const statusY1 = inputY - statusLines; // First (or only) status line
   const statusY2 = statusLines === 2 ? inputY - 1 : null; // Second line only in NORMAL mode
   const contextY = statusY1 - 1; // Context bar above status
+  const taskBarY = contextY - 1; // Task bar above context bar
   const chatAreaY = 1;
-  const chatAreaHeight = contextY - 1; // Chat goes up to context bar
+  const chatAreaHeight = taskBarY - 1; // Chat goes up to task bar
 
   return {
     width,
@@ -251,6 +254,11 @@ function getLayout(inputText: string = '', mode: 'INSERT' | 'NORMAL' = 'NORMAL')
       y: chatAreaY,
       width: chatAreaWidth,
       height: chatAreaHeight,
+    },
+    taskBar: {
+      x: chatAreaX,
+      y: taskBarY,
+      width: chatAreaWidth,
     },
     contextBar: {
       x: chatAreaX,
@@ -321,6 +329,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     lastInputHeight: 1,
     lastShowToolIndicator: false,
     lastToolCount: 0,
+    lastTaskInfo: '',
   };
 
   // Callbacks
@@ -713,6 +722,59 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
   }
 
   /**
+   * Draw task bar - shows current task progress summary
+   */
+  function drawTaskBar(force: boolean = false) {
+    // Skip drawing if log viewer or requirements overlay is open
+    if (logViewer.isOpen() || requirementsOverlay?.isActive()) return;
+
+    const tasks = taskWatcher.getTasks();
+    const completed = tasks.filter((t) => t.status === 'completed').length;
+    const inProgress = tasks.find((t) => t.status === 'in_progress');
+    const total = tasks.length;
+
+    // Build task info string
+    let taskInfo = '';
+    if (total === 0) {
+      taskInfo = '\x1b[2mNo tasks\x1b[0m';
+    } else {
+      // Progress: [3/12]
+      const progress = `[${completed}/${total}]`;
+      taskInfo = `\x1b[35m${progress}\x1b[0m`;
+
+      // Current task
+      if (inProgress) {
+        // Use activeForm if available (e.g., "Running tests"), otherwise subject
+        const taskName = inProgress.activeForm || inProgress.subject;
+        // Truncate if too long
+        const maxLen = 50;
+        const truncated = taskName.length > maxLen ? taskName.slice(0, maxLen - 1) + '…' : taskName;
+        taskInfo += ` \x1b[1m▸\x1b[0m \x1b[37m${truncated}\x1b[0m`;
+      } else if (completed === total) {
+        taskInfo += ' \x1b[32m✓ All complete\x1b[0m';
+      } else {
+        taskInfo += ' \x1b[2m(none in progress)\x1b[0m';
+      }
+    }
+
+    // Check if changed
+    if (!force && taskInfo === tracker.lastTaskInfo) return;
+    tracker.lastTaskInfo = taskInfo;
+
+    const layout = getLayout(state.inputBuffer, state.mode);
+    const taskBarX = layout.taskBar.x;
+    const taskBarY = layout.taskBar.y;
+
+    // Clear the task bar line
+    term.moveTo(taskBarX, taskBarY);
+    process.stdout.write(' '.repeat(layout.taskBar.width));
+
+    // Draw task info
+    term.moveTo(taskBarX, taskBarY);
+    process.stdout.write(taskInfo);
+  }
+
+  /**
    * Draw status bar
    * INSERT mode: single line
    * SCROLL mode: two lines with vertical alignment
@@ -793,7 +855,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       // Line 2: aligned under the hints (12 chars in: 8 for badge + 4 spaces)
       const indent = ' '.repeat(12); // 8 (badge) + 4 (spaces)
-      const line2 = `${indent}${DIM}o:log  ·  ${musicLabel}  ·  ${sfxLabel}${RESET}`;
+      const line2 = `${indent}${DIM}t:tasks  ·  o:log  ·  ${musicLabel}  ·  ${sfxLabel}${RESET}`;
 
       term.moveTo(statusX, statusY1);
       process.stdout.write(line1);
@@ -820,20 +882,21 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
     if (!force && !inputChanged && !heightChanged) return;
 
-    // Handle input height changes - need to clear old areas and redraw context/status
+    // Handle input height changes - need to clear old areas and redraw task/context/status
     if (heightChanged) {
-      // Calculate where the OLD context bar was (before height change)
+      // Calculate where the OLD task bar was (before height change)
       const oldInputHeight = tracker.lastInputHeight;
       const oldInputY = layout.height - oldInputHeight + 1;
       const oldStatusY = oldInputY - 1;
       const oldContextY = oldStatusY - 1;
+      const oldTaskBarY = oldContextY - 1;
 
-      // New context position
-      const newContextY = layout.contextBar.y;
+      // New task bar position
+      const newTaskBarY = layout.taskBar.y;
 
-      // Clear from the higher of old/new context positions down to bottom
+      // Clear from the higher of old/new task bar positions down to bottom
       // This ensures ghost lines are cleared when input shrinks
-      const clearStartY = Math.min(oldContextY, newContextY);
+      const clearStartY = Math.min(oldTaskBarY, newTaskBarY);
 
       for (let y = clearStartY; y <= layout.height; y++) {
         if (y >= 1) {
@@ -845,7 +908,8 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
 
       tracker.lastInputHeight = inputHeight;
 
-      // Redraw context and status at their new positions
+      // Redraw task bar, context and status at their new positions
+      drawTaskBar(true);
       drawContext(true);
       drawStatus(true);
     }
@@ -1027,6 +1091,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     tracker.lastContextPercent = -1;
     tracker.lastOrchestratorPercent = null;
     tracker.lastInputHeight = 1;
+    tracker.lastTaskInfo = '';
 
     term.clear();
 
@@ -1040,6 +1105,7 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
         questLog.draw();
       }
       drawChat(true);
+      drawTaskBar(true);
       drawContext(true);
       drawStatus(true);
       drawInput(true);
@@ -1159,10 +1225,15 @@ export function createTUI(appState: AppState, selectedCharacter?: number): TUI {
     taskWatcher,
   });
 
-  // Wire up task updates to redraw quest log when visible
+  // Wire up task updates to redraw task bar and quest log
   taskWatcher.onUpdate(() => {
-    if (questLog.isVisible() && state.drawingEnabled && process.stdout.isTTY) {
-      questLog.draw();
+    if (state.drawingEnabled && process.stdout.isTTY) {
+      // Always update the task bar summary
+      drawTaskBar();
+      // Also update quest log overlay if visible
+      if (questLog.isVisible()) {
+        questLog.draw();
+      }
     }
   });
 
