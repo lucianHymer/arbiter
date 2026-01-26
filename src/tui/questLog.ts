@@ -109,22 +109,34 @@ export function createQuestLog(deps: QuestLogDeps): QuestLog {
   }
 
   /**
-   * Wrap text to multiple lines
+   * Wrap text to multiple lines, respecting existing newlines
    */
   function wrapText(text: string, width: number): string[] {
-    const words = text.split(' ');
     const lines: string[] = [];
-    let currentLine = '';
 
-    for (const word of words) {
-      if (currentLine.length + word.length + 1 <= width) {
-        currentLine += (currentLine ? ' ' : '') + word;
-      } else {
-        if (currentLine) lines.push(currentLine);
-        currentLine = word;
+    // Split on newlines first, then wrap each paragraph
+    const paragraphs = text.split(/\r?\n/);
+
+    for (const paragraph of paragraphs) {
+      if (paragraph.trim() === '') {
+        lines.push('');
+        continue;
       }
+
+      const words = paragraph.split(' ');
+      let currentLine = '';
+
+      for (const word of words) {
+        if (currentLine.length + word.length + 1 <= width) {
+          currentLine += (currentLine ? ' ' : '') + word;
+        } else {
+          if (currentLine) lines.push(currentLine);
+          currentLine = word;
+        }
+      }
+      if (currentLine) lines.push(currentLine);
     }
-    if (currentLine) lines.push(currentLine);
+
     return lines;
   }
 
